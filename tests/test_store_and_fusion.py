@@ -137,3 +137,43 @@ def test_blast_radius_follows_host_edges(plugin_home, registry, monkeypatch):
     store = H.submodule("store").get_store()
     radius = fusion.blast_radius(store, "svc-alpha")
     assert [item["id"] for item in radius["upstream"]] == ["srv-host1"]
+
+
+def test_writes_wait_for_another_process_holding_the_lock(plugin_home):
+    """Several Hermes processes share one plugin DB; a busy peer must not fail the write."""
+    import os
+    import pathlib
+    import sqlite3
+    import threading
+    import time
+
+    H.load_plugin()
+    store = H.submodule("store").get_store()
+    row = store.conn.execute("PRAGMA database_list").fetchone()
+    db_path = pathlib.Path(row[2])
+    assert db_path.exists(), f"expected the plugin DB at {db_path}"
+
+    peer = sqlite3.connect(db_path, timeout=0.1, isolation_level=None)
+    peer.execute("BEGIN IMMEDIATE")
+    peer.execute(
+        "INSERT INTO session_reads (session_id, node_id, read_via, read_at) VALUES (?, ?, ?, ?)",
+        ("peer", "node-z", "read_file", 0),
+    )
+
+    result = {}
+
+    def worker():
+        try:
+            result["ok"] = store.record_session_read("session-after-contention", "node-z", "read_file")
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = repr(exc)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    time.sleep(0.3)          # worker is now blocked on the peer's write lock
+    peer.commit()
+    peer.close()
+    thread.join(15)
+
+    assert "error" not in result, result
+    assert result.get("ok") is True

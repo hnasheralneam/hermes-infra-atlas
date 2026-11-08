@@ -128,6 +128,31 @@ def infra_query(args: dict[str, Any], session_id: str = "", task_id: str = "", *
         if store.record_session_read(session, node["id"], "infra_query"):
             unlocked.append(node["id"])
 
+    # Surface the read in the activity stream and on the desktop graph, exactly
+    # like a read_file unlock does.
+    if unlocked:
+        try:
+            from .hooks import _broadcast  # noqa: PLC0415
+
+            for node in nodes:
+                if node["id"] not in unlocked:
+                    continue
+                summary = f"read {node.get('registry_path') or node['id']}"
+                store.log_activity(session, "infra_query", node["id"], "read_doc", summary=summary)
+                _broadcast(
+                    "activity",
+                    {
+                        "session_id": session,
+                        "node_id": node["id"],
+                        "label": node.get("label"),
+                        "action_kind": "read_doc",
+                        "tool_name": "infra_query",
+                        "summary": summary,
+                    },
+                )
+        except Exception:  # noqa: BLE001 - telemetry must never fail the read
+            logger.debug("infra-atlas: read broadcast failed", exc_info=True)
+
     detailed = len(nodes) <= 3
     payload = {
         "found": len(nodes),

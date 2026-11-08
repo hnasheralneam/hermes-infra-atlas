@@ -144,3 +144,32 @@ def test_guardrail_ignores_unregistered_targets(plugin_home, registry):
     _seed(store)
     # 10.0.0.99 is not in the graph: nothing to read, so nothing to block
     assert hooks.on_pre_tool_call(tool_name="terminal", args={"command": "ssh root@10.0.0.99 uptime"}, session_id="s7") is None
+
+
+def test_blocked_call_is_not_also_logged_as_allowed(plugin_home, registry):
+    """post_tool_call fires for a vetoed call; it must not claim the touch happened."""
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    hooks = H.submodule("hooks")
+    _seed(store)
+
+    args = {"command": "ssh root@10.0.0.212 uptime"}
+    assert hooks.on_pre_tool_call(tool_name="terminal", args=args, session_id="s8")["action"] == "block"
+    hooks.on_post_tool_call(tool_name="terminal", args=args, result="blocked", session_id="s8")
+
+    kinds = [entry["action_kind"] for entry in store.recent_activity(limit=10)]
+    assert kinds.count("touch_blocked") == 1
+    assert "touch_allowed" not in kinds
+
+
+def test_infra_query_records_the_read_in_the_stream(plugin_home, registry):
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    _seed(store)
+    tools = H.submodule("atlas_tools")
+
+    tools.infra_query({"node_id": "svc-litellm"}, session_id="s9")
+    entries = store.recent_activity(limit=10)
+    assert any(entry["action_kind"] == "read_doc" and entry["node_id"] == "svc-litellm" for entry in entries)

@@ -10,6 +10,7 @@ the very case the plugin is meant to surface.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
 from . import config as plugin_config
@@ -19,6 +20,26 @@ from .store import get_store
 logger = logging.getLogger(__name__)
 
 _BLOCK_PREFIX = "[Infra Atlas Guardrail — Read Before You Touch]"
+
+# A blocked call still fires post_tool_call. Remember the decision so the
+# observer does not log a vetoed call as an allowed touch a moment later.
+_recent_decisions: dict[tuple[str, str, str], tuple[str, float]] = {}
+
+
+def _remember(session: str, tool_name: str, node_id: str, kind: str) -> None:
+    now = time.time()
+    for key, (_kind, ts) in list(_recent_decisions.items()):
+        if now - ts > 30:  # keep the map bounded in a long-lived gateway
+            _recent_decisions.pop(key, None)
+    _recent_decisions[(session, tool_name, node_id)] = (kind, now)
+
+
+def _take_decision(session: str, tool_name: str, node_id: str) -> Optional[str]:
+    entry = _recent_decisions.pop((session, tool_name, node_id), None)
+    if not entry:
+        return None
+    kind, ts = entry
+    return kind if time.time() - ts <= 30 else None
 
 
 def _broadcast(event: str, payload: dict[str, Any]) -> None:
@@ -89,6 +110,7 @@ def on_pre_tool_call(
         preview = matcher.preview(args or {})
         if mode == "warn":
             for node in unread:
+                _remember(session, tool_name, node["id"], "touch_warned")
                 store.log_activity(
                     session,
                     tool_name,
@@ -128,6 +150,7 @@ def on_pre_tool_call(
             message += f" (managed by {primary['managed_by']})"
 
         for node in unread:
+            _remember(session, tool_name, node["id"], "touch_blocked")
             store.log_activity(
                 session,
                 tool_name,
@@ -176,6 +199,11 @@ def on_post_tool_call(
             return
         for node in classified["nodes"]:
             if not node.get("registry_path"):
+                continue
+            decision = _take_decision(session, tool_name, node["id"])
+            if decision in {"touch_blocked", "touch_warned"}:
+                # pre_tool_call already recorded (and broadcast) this decision;
+                # post_tool_call fires even for a vetoed call.
                 continue
             store.log_activity(
                 session,

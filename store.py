@@ -198,8 +198,29 @@ class AtlasStore:
 
     def _init_schema(self) -> None:
         assert self._conn is not None
+        # Several Hermes processes (gateway, CLI sessions, cron) can share one
+        # plugin DB. Without a busy timeout the first concurrent writer wins and
+        # everyone else fails instantly with "database is locked" — which showed
+        # up as infra_query silently failing to record a read, so the guardrail
+        # kept blocking work the agent had already looked up.
+        self._conn.execute("PRAGMA busy_timeout=8000")
         self._conn.executescript(SCHEMA)
         self._conn.commit()
+
+    def _write(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        """Run one write, retrying briefly while another process holds the lock."""
+        delay = 0.05
+        for attempt in range(6):
+            with self._lock:
+                try:
+                    self.conn.execute(sql, params)
+                    self._commit()
+                    return
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == 5:
+                        raise
+            time.sleep(delay)
+            delay *= 2
 
     def close(self) -> None:
         with self._lock:
@@ -392,16 +413,14 @@ class AtlasStore:
         """Return True when this call newly unlocked the node for the session."""
         if not session_id or not node_id:
             return False
-        with self._lock:
-            try:
-                self.conn.execute(
-                    "INSERT INTO session_reads (session_id, node_id, read_via, read_at) VALUES (?, ?, ?, ?)",
-                    (session_id, node_id, read_via, _now()),
-                )
-                self.conn.commit()
-                return True
-            except sqlite3.IntegrityError:
-                return False
+        try:
+            self._write(
+                "INSERT INTO session_reads (session_id, node_id, read_via, read_at) VALUES (?, ?, ?, ?)",
+                (session_id, node_id, read_via, _now()),
+            )
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
     def has_session_read(self, session_id: str, node_id: str) -> bool:
         if not session_id:
@@ -433,13 +452,11 @@ class AtlasStore:
         summary: str = "",
         args_preview: str = "",
     ) -> None:
-        with self._lock:
-            self.conn.execute(
-                "INSERT INTO activity_ledger (ts, session_id, tool_name, node_id, action_kind, blocked, summary, args_preview)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (_now(), session_id or "", tool_name, node_id, action_kind, 1 if blocked else 0, summary, args_preview[:500]),
-            )
-            self.conn.commit()
+        self._write(
+            "INSERT INTO activity_ledger (ts, session_id, tool_name, node_id, action_kind, blocked, summary, args_preview)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (_now(), session_id or "", tool_name, node_id, action_kind, 1 if blocked else 0, summary, args_preview[:500]),
+        )
 
     def recent_activity(self, limit: int = 50, session_id: Optional[str] = None, node_id: Optional[str] = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM activity_ledger"
