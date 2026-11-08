@@ -275,6 +275,10 @@ class AtlasStore:
     def _readonly_conn(self) -> sqlite3.Connection:
         with self._ro_lock:
             if self._ro_conn is None:
+                # Touching self.conn opens the database and records its path; the
+                # hot path may be the first thing that runs in this process, so it
+                # must not depend on someone else having initialised the store.
+                _ = self.conn
                 path = self._db_path
                 if not path:
                     raise sqlite3.OperationalError("no database file to open read-only")
@@ -485,7 +489,7 @@ class AtlasStore:
             else:
                 marks = ",".join("?" for _ in keep)
                 self._run(f"DELETE FROM nodes WHERE id NOT IN ({marks})", keep)
-            self.conn.commit()
+            self._commit_with_retry()
 
     def prune_live_nodes(self, owners: Iterable[str], keep_ids: Iterable[str]) -> int:
         """Delete live-only nodes a collector stopped reporting.
@@ -511,7 +515,7 @@ class AtlasStore:
                 self._run("DELETE FROM nodes WHERE id = ?", (node_id,))
                 self._run("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
             if doomed:
-                self.conn.commit()
+                self._commit_with_retry()
             return len(doomed)
 
     # -- edges ----------------------------------------------------------
@@ -577,7 +581,7 @@ class AtlasStore:
     def clear_session(self, session_id: str) -> None:
         with self._lock:
             self._run("DELETE FROM session_reads WHERE session_id = ?", (session_id,))
-            self.conn.commit()
+            self._commit_with_retry()
 
     # -- activity -------------------------------------------------------
     def log_activity(
@@ -642,7 +646,7 @@ class AtlasStore:
                     node_id,
                 ),
             )
-            self.conn.commit()
+            self._commit_with_retry()
 
     def bump_failure_streak(self, node_id: str) -> int:
         with self._lock:
@@ -650,13 +654,13 @@ class AtlasStore:
                 "UPDATE nodes SET failure_streak = failure_streak + 1, updated_at = ? WHERE id = ?", (_now(), node_id)
             )
             row = self._run("SELECT failure_streak FROM nodes WHERE id = ?", (node_id,)).fetchone()
-            self.conn.commit()
+            self._commit_with_retry()
         return int(row["failure_streak"]) if row else 0
 
     def reset_failure_streak(self, node_id: str) -> None:
         with self._lock:
             self._run("UPDATE nodes SET failure_streak = 0, updated_at = ? WHERE id = ?", (_now(), node_id))
-            self.conn.commit()
+            self._commit_with_retry()
 
     def insert_probe_sample(
         self,
@@ -706,7 +710,7 @@ class AtlasStore:
                 " FROM probe_samples) WHERE rn <= ?)",
                 (int(keep_per_node),),
             )
-            self.conn.commit()
+            self._commit_with_retry()
 
     # -- incidents ------------------------------------------------------
     def open_incident(
@@ -730,7 +734,7 @@ class AtlasStore:
                     " WHERE id = ?",
                     (failure_count, trigger_error[:500], root_cause_hint, now, row["id"]),
                 )
-                self.conn.commit()
+                self._commit_with_retry()
                 incident_id = row["id"]
             else:
                 cur = self._run(
@@ -738,7 +742,7 @@ class AtlasStore:
                     " root_cause_hint, updated_at) VALUES (?, ?, 'open', ?, ?, ?, ?, ?)",
                     (node_id, node_label, now, failure_count, trigger_error[:500], root_cause_hint, now),
                 )
-                self.conn.commit()
+                self._commit_with_retry()
                 incident_id = cur.lastrowid
             fresh = self._run("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         return dict(fresh)
@@ -797,7 +801,7 @@ class AtlasStore:
         payload["id"] = int(incident_id)
         with self._lock:
             self._run(f"UPDATE incidents SET {assignments} WHERE id=:id", payload)
-            self.conn.commit()
+            self._commit_with_retry()
 
     def list_incidents(self, statuses: Optional[Iterable[str]] = None, limit: int = 50, node_id: Optional[str] = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM incidents"
@@ -824,7 +828,7 @@ class AtlasStore:
                 "INSERT INTO sweeps (ts, duration_ms, sources_json, counts_json, summary) VALUES (?, ?, ?, ?, ?)",
                 (_now(), int(duration_ms), json.dumps(sources), json.dumps(counts), summary[:800]),
             )
-            self.conn.commit()
+            self._commit_with_retry()
             return int(cur.lastrowid)
 
     def latest_sweep(self) -> Optional[dict[str, Any]]:
@@ -853,7 +857,7 @@ class AtlasStore:
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (sweep_id, _now(), node_id, node_label, prev_drift, new_drift, json.dumps(field_diffs), evidence[:800]),
             )
-            self.conn.commit()
+            self._commit_with_retry()
 
     def recent_drift_events(self, since: float, node_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
         sql = "SELECT * FROM drift_events WHERE ts >= ?"

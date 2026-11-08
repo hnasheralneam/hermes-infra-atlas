@@ -210,3 +210,20 @@ def test_failed_statement_releases_the_bulk_transaction(plugin_home):
 
     assert not store.conn.in_transaction, "a failed statement must roll the transaction back"
     assert store._bulk is False, "the bulk flag must not survive the failure"
+
+
+def test_read_only_path_initialises_the_store_itself(plugin_home):
+    """The guardrail may be the first thing to touch the store in a process.
+
+    Regression: the read-only helper read a cached path that only schema init
+    populated, so on a fresh process it returned "no database" — the matcher saw
+    an empty graph and the gate silently stopped firing.
+    """
+    H.load_plugin()
+    store = H.submodule("store").get_store()
+    store.upsert_node({"id": "svc-ro", "label": "ro", "kind": "service"})
+
+    fresh = type(store)()          # same class, nothing initialised yet
+    nodes = fresh.list_nodes_ro()
+    assert [node["id"] for node in nodes] == ["svc-ro"]
+    assert fresh.has_session_read_ro("nobody", "svc-ro") is False

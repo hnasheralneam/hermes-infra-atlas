@@ -36,6 +36,10 @@ def _slug(text: str) -> str:
 # services running on it, the machine is the referent.
 _MACHINE_KINDS = {"server", "vm", "lxc", "peer", "host"}
 
+# Identifier-shaped runs in free text, then the parts an id/unit/path is made of.
+_SEGMENT_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")      # words, units, dotted ids
+_PATH_SEGMENT_RE = re.compile(r"[a-z0-9][a-z0-9._/-]*")  # the same, allowing a path
+
 
 def _tokens_for(node: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
@@ -53,7 +57,22 @@ def _tokens_for(node: dict[str, Any]) -> set[str]:
         tokens.add(str(node["systemd_unit"]).removesuffix(".service").lower())
     if node.get("label"):
         tokens.add(_slug(str(node["label"])))
-    return {token for token in tokens if token and len(token) >= 3}
+    return {token for token in tokens if _IDENTIFIER_RE.match(token)}
+
+
+_IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._:@/-]{2,63}$")
+
+
+def _primary_tokens(node: dict[str, Any]) -> set[str]:
+    """Names that identify the node itself, not a phrase it appears in."""
+    primary: set[str] = set()
+    if node.get("id"):
+        primary.add(str(node["id"]).lower())
+    if node.get("registry_path"):
+        primary.add(str(node["registry_path"]).rsplit("/", 1)[-1].removesuffix(".md").lower())
+    if node.get("project_path"):
+        primary.add(_slug(str(node["project_path"]).rstrip("/").split("/")[-1]))
+    return {token for token in primary if token}
 
 
 def _specific_tokens(node: dict[str, Any]) -> set[str]:
@@ -115,13 +134,22 @@ def match_text(store, text: str) -> list[dict[str, Any]]:
         return []
     cache = _build(store)
     haystack = str(text).lower()
+    # Whole identifiers only. Substring matching made "llama-dashboard" a
+    # reference to "llama-ctl" and "llama-server" through the shared word
+    # "llama", so two unrelated services were named for one command.
+    candidates: set[str] = set(_SEGMENT_RE.findall(haystack))
+    candidates.update(_PATH_SEGMENT_RE.findall(haystack))
+    for segment in list(candidates):
+        for part in segment.split("."):
+            if part:
+                candidates.add(part)
     hits: dict[str, set[str]] = {}
-    for token, owners in cache["claims"].items():
-        if len(token) < 4 and not token[0].isdigit():
+    for candidate in candidates:
+        owners = cache["claims"].get(candidate)
+        if not owners:
             continue
-        if token in haystack:
-            for node_id in owners:
-                hits.setdefault(node_id, set()).add(token)
+        for node_id in owners:
+            hits.setdefault(node_id, set()).add(candidate)
     if not hits:
         # An explicit `qm <vmid>` / `pct <vmid>` still resolves.
         for match in _VMID_CMD_RE.finditer(haystack):
@@ -134,6 +162,8 @@ def match_text(store, text: str) -> list[dict[str, Any]]:
         node = cache["nodes"].get(node_id) or {}
         # Naming the node (unit, id, label, entry path) beats sharing an address
         # with it; an address:port pair names the service on that port.
+        if hits[node_id] & _primary_tokens(node):
+            return 3
         if hits[node_id] & _specific_tokens(node):
             return 2
         address = str(node.get("host_ip") or "").lower()

@@ -155,3 +155,25 @@ def test_fixture_is_sanitized_and_complete(plugin_home):
     assert all(addr.startswith(("10.20.", "100.64.")) for addr in addresses)
     statuses = {node["drift_status"] for node in payload["nodes"]}
     assert {"matched", "changed", "unregistered", "stale"} <= statuses
+
+
+def test_an_unresolvable_host_does_not_stall_the_sweep(plugin_home):
+    """DNS hangs used to cost minutes: getaddrinfo ignores the socket timeout."""
+    import time
+
+    H.load_plugin()
+    probes = H.submodule("collectors.probes")
+
+    started = time.monotonic()
+    result = probes.collect(
+        [
+            {"id": "n-dns", "probe": "http://host.invalid:8080/health"},
+            {"id": "n-tcp", "probe": "tcp://host.invalid:9"},
+        ],
+        timeout=1.0,
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 8, f"probe sweep took {elapsed:.1f}s on an unresolvable host"
+    assert {node["id"] for node in result.nodes} == {"n-dns", "n-tcp"}
+    assert all(node["health_status"] in {"unknown", "down"} for node in result.nodes)
