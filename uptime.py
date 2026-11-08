@@ -306,7 +306,9 @@ def main() -> int:
     try:
         return _run()
     except Exception as exc:  # noqa: BLE001
-        print(json.dumps({"wakeAgent": False, "skipped": f"watchdog could not run: {exc}"}))
+        # Silent by design: the job delivers stdout verbatim, and a watchdog that
+        # cannot read its own state must not page anyone about itself.
+        print(f"infra-atlas watchdog skipped: {exc}", file=sys.stderr)
         return 0
 
 
@@ -320,19 +322,23 @@ def _run() -> int:
     config.configure(None)
     summary = fusion.run_sweep(trigger_auto_heal=True, session_id="cron-watchdog")
     store = store_module.get_store()
-    silent = {"wakeAgent": False}
-    pending = store.list_incidents(statuses=["open", "healing"])
+    pending = store.list_incidents(statuses=["open", "healing", "escalated"])
     if not pending:
-        print(json.dumps(summary.get("counts", {})))
-        print(json.dumps(silent))
-        return 0
+        return 0  # nothing to say: empty stdout sends nothing
     briefs = []
     for incident in pending:
         node = store.get_node(incident["node_id"])
         if node:
             briefs.append(uptime.remediation_brief(store, node, incident))
+        else:
+            # The node left the graph (renamed or pruned) but the incident is still
+            briefs.append(
+                "## " + str(incident["node_id"]) + " — open incident, node no longer in the graph | "
+                + "#" + str(incident["id"]) + " (" + str(incident["status"]) + "): "
+                + str(incident.get("trigger_error") or "unknown error")
+                + " | no graph node matches this id; confirm with infra_sweep, then close the incident."
+            )
     if not briefs:
-        print(json.dumps(silent))
         return 0
     print("\\n\\n".join(briefs))
     return 0
