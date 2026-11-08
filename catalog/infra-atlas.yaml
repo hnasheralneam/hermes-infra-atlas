@@ -1,0 +1,26 @@
+name: infra-atlas
+repo: https://github.com/hnasheralneam/hermes-infra-atlas
+sha: "546b7f225e0d94af3e585183dd10efc8898f1df7"
+description: Registry-backed infrastructure graph with drift detection, a read-before-touch guardrail, and autonomous downtime response.
+maintainer: hnasheralneam
+tier: community
+category: automation
+requires_hermes: ">=0.21.5"
+version: "0.1.0"
+readme: true
+platforms: [linux]
+title: "Infra Atlas"
+capabilities:
+  provides_tools:
+    - infra_query
+    - infra_sweep
+    - infra_diff
+    - infra_upsert
+    - infra_bootstrap
+    - infra_incidents
+  provides_hooks:
+    - pre_tool_call
+    - post_tool_call
+    - on_session_start
+  provides_middleware: []
+  requires_env: []
