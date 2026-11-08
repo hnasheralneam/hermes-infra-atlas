@@ -32,6 +32,11 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
 
 
+# Kinds that own an address. When a token is claimed by one machine and by the
+# services running on it, the machine is the referent.
+_MACHINE_KINDS = {"server", "vm", "lxc", "peer", "host"}
+
+
 def _tokens_for(node: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     for key in ("id", "label", "host_ip", "tailnet_ip", "systemd_unit", "project_path", "registry_path"):
@@ -51,23 +56,45 @@ def _tokens_for(node: dict[str, Any]) -> set[str]:
     return {token for token in tokens if token and len(token) >= 3}
 
 
+def _specific_tokens(node: dict[str, Any]) -> set[str]:
+    """Tokens that name *this* node: ids, labels, units, paths — not addresses."""
+    specific: set[str] = set()
+    for key in ("id", "label", "systemd_unit", "project_path", "registry_path"):
+        value = node.get(key)
+        if value:
+            specific.add(str(value).strip().lower())
+    if node.get("registry_path"):
+        specific.add(str(node["registry_path"]).rsplit("/", 1)[-1].removesuffix(".md").lower())
+    if node.get("systemd_unit"):
+        specific.add(str(node["systemd_unit"]).removesuffix(".service").lower())
+    if node.get("label"):
+        specific.add(_slug(str(node["label"])))
+    return {token for token in specific if token and len(token) >= 3}
+
+
 def _build(store) -> dict[str, Any]:
-    nodes = store.list_nodes()
+    # Hooks call this on every tool call: read through the plugin's read-only
+    # connection so a writer (a sweep, another process) can never make the
+    # guardrail wait.
+    reader = getattr(store, "list_nodes_ro", None)
+    nodes = reader() if reader is not None else store.list_nodes()
     signature = (len(nodes), max((node.get("updated_at") or 0) for node in nodes) if nodes else 0)
     with _lock:
         if _cache["key"] == signature:
             return _cache
-        index: dict[str, str] = {}
         by_id: dict[str, dict[str, Any]] = {}
         vmid_index: dict[int, str] = {}
+        # token -> every node that claims it. Values are shared all the time (a
+        # host and its services carry the same address), so resolving a token to
+        # one node here would make the first alphabetical owner answer for all.
+        claims: dict[str, set[str]] = {}
         for node in nodes:
             by_id[node["id"]] = node
             if node.get("vmid"):
                 vmid_index[int(node["vmid"])] = node["id"]
             for token in _tokens_for(node):
-                # First writer wins: an exact id never gets shadowed by a label.
-                index.setdefault(token, node["id"])
-        _cache.update({"key": signature, "index": index, "nodes": by_id, "vmid": vmid_index})
+                claims.setdefault(token, set()).add(node["id"])
+        _cache.update({"key": signature, "claims": claims, "nodes": by_id, "vmid": vmid_index})
         return _cache
 
 
@@ -77,24 +104,64 @@ def refresh() -> None:
 
 
 def match_text(store, text: str) -> list[dict[str, Any]]:
-    """Nodes referenced by a free-form string (command, path, prompt)."""
+    """Nodes a free-form string (command, path, prompt) actually references.
+
+    Specificity beats breadth: ``curl 10.0.0.212:4000`` names the service on that
+    port, not the machine that shares the address, while ``ssh root@10.0.0.212``
+    names the machine. A value claimed by several machines (every VM on a cluster
+    documenting the node's IP) is not treated as a reference at all.
+    """
     if not text:
         return []
     cache = _build(store)
     haystack = str(text).lower()
-    found: dict[str, dict[str, Any]] = {}
-    for token, node_id in cache["index"].items():
+    hits: dict[str, set[str]] = {}
+    for token, owners in cache["claims"].items():
         if len(token) < 4 and not token[0].isdigit():
             continue
         if token in haystack:
-            node = cache["nodes"].get(node_id)
-            if node:
-                found[node_id] = node
-    for match in _VMID_CMD_RE.finditer(haystack):
-        node_id = cache.get("vmid", {}).get(int(match.group(1)))
-        if node_id and node_id in cache["nodes"]:
-            found[node_id] = cache["nodes"][node_id]
-    return list(found.values())
+            for node_id in owners:
+                hits.setdefault(node_id, set()).add(token)
+    if not hits:
+        # An explicit `qm <vmid>` / `pct <vmid>` still resolves.
+        for match in _VMID_CMD_RE.finditer(haystack):
+            node_id = cache.get("vmid", {}).get(int(match.group(1)))
+            if node_id in cache["nodes"]:
+                return [cache["nodes"][node_id]]
+        return []
+
+    def score(node_id: str) -> int:
+        node = cache["nodes"].get(node_id) or {}
+        # Naming the node (unit, id, label, entry path) beats sharing an address
+        # with it; an address:port pair names the service on that port.
+        if hits[node_id] & _specific_tokens(node):
+            return 2
+        address = str(node.get("host_ip") or "").lower()
+        ports = [str(port) for port in (node.get("ports") or [])]
+        if address and address in haystack and any(f"{address}:{port}" in haystack for port in ports):
+            return 2
+        return 1
+
+    scores = {node_id: score(node_id) for node_id in hits}
+    best = max(scores.values())
+    candidates = [node_id for node_id, value in scores.items() if value == best]
+    if best == 1 and len(candidates) > 1:
+        machines = [
+            node_id
+            for node_id in candidates
+            if str((cache["nodes"].get(node_id) or {}).get("kind") or "") in _MACHINE_KINDS
+        ]
+        if len(machines) == 1:
+            candidates = machines
+        else:
+            # Several machines share this value; a shared address is not a
+            # reference, so only an unambiguous id/label hit counts.
+            ids = [node_id for node_id in candidates if node_id in hits.get(node_id, set())]
+            if len(ids) == 1:
+                candidates = ids
+            else:
+                return []
+    return [cache["nodes"][node_id] for node_id in candidates if node_id in cache["nodes"]]
 
 
 def nodes_for_registry_path(store, path: str) -> list[dict[str, Any]]:

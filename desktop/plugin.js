@@ -18,12 +18,13 @@ const PAGE_PATH = '/infra-atlas'
 let API = null // ctx, kept for ctx.rest / ctx.storage
 let pendingSelect = null
 
-const DRIFT_ORDER = ['changed', 'unregistered', 'stale', 'matched', 'doc_only']
+const DRIFT_ORDER = ['changed', 'unregistered', 'stale', 'observed', 'matched', 'doc_only']
 const DRIFT_LABEL = {
   matched: 'matched',
   changed: 'drift',
   unregistered: 'unregistered',
   stale: 'stale',
+  observed: 'peer',
   doc_only: 'doc only'
 }
 const HEALTH_COLOR = {
@@ -37,6 +38,7 @@ const DRIFT_COLOR = {
   changed: 'var(--ui-warning, #f59e0b)',
   unregistered: 'var(--ui-info, #06b6d4)',
   stale: 'var(--ui-danger, #ef4444)',
+  observed: 'var(--ui-text-tertiary, #8b8f98)',
   doc_only: 'var(--ui-text-quaternary, #6b7280)'
 }
 
@@ -232,6 +234,9 @@ function InfraAtlasPage() {
               pill('changed', `Changed (${counts.changed || 0})`, filter, setFilter, DRIFT_COLOR.changed),
               pill('unregistered', `Unregistered (${counts.unregistered || 0})`, filter, setFilter, DRIFT_COLOR.unregistered),
               pill('stale', `Stale (${counts.stale || 0})`, filter, setFilter, DRIFT_COLOR.stale),
+              counts.observed
+                ? pill('observed', `Peers (${counts.observed})`, filter, setFilter, DRIFT_COLOR.observed)
+                : null,
               incidents.length
                 ? jsx('span', {
                     className: 'ia-pill ia-pill-incident',

@@ -73,7 +73,7 @@ def collect() -> CollectorResult:
         result.nodes.append(
             {
                 "id": f"srv-{_slug(hostname or ips[0])}",
-                "kind": "server",
+                "kind": "peer",
                 "stratum": 1,
                 "label": hostname or (ips[0] if ips else "tailnet node"),
                 "tailnet_ip": ips[0] if ips else None,

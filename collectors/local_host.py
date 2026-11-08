@@ -21,6 +21,30 @@ from . import CollectorResult
 
 MAX_OUTPUT = 2_000_000
 
+# Per-session desktop plumbing: every login starts these, nobody documents them,
+# and left alone they read as "undocumented services" on every sweep.
+_SESSION_NOISE_UNITS = {
+    "dbus",
+    "dbus-broker",
+    "dconf-service",
+    "gpg-agent",
+    "ssh-agent",
+    "at-spi-dbus-bus",
+    "pipewire",
+    "pipewire-pulse",
+    "wireplumber",
+    "pulseaudio",
+    "gnome-keyring-daemon",
+    "tracker-miner-fs-3",
+    "xdg-desktop-portal",
+    "xdg-desktop-portal-gnome",
+    "xdg-desktop-portal-gtk",
+    "xdg-document-portal",
+    "xdg-permission-store",
+    "gvfs-daemon",
+    "gvfs-udisks2-volume-monitor",
+}
+
 
 def _run(argv: list[str], timeout: float = 2.0) -> tuple[int, str]:
     try:
@@ -214,6 +238,11 @@ def collect() -> CollectorResult:
         for unit in _systemd_units(scope):
             name = unit["unit"]
             active = unit["active"]
+            # Per-session desktop plumbing: every login starts these, nobody
+            # documents them, and they would otherwise read as "undocumented
+            # services" on every sweep.
+            if name.removesuffix(".service") in _SESSION_NOISE_UNITS:
+                continue
             # `inactive`/`dead` is the normal state of oneshot units and of
             # services nobody started: not an outage, and not worth a graph node
             # on system scope (which lists ~300 units on a desktop).
@@ -269,7 +298,7 @@ def collect() -> CollectorResult:
         result.nodes.append(
             {
                 "id": f"srv-{_slug(peer['hostname'])}",
-                "kind": "server",
+                "kind": "peer",
                 "stratum": 1,
                 "label": peer["hostname"],
                 "tailnet_ip": peer["tailnet_ip"],

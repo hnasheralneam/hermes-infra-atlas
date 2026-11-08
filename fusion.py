@@ -149,6 +149,11 @@ def _classify(node: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]
 
     if node.get("_runtime"):
         return "matched", [], []
+    if str(node.get("kind") or "") == "peer" and not node.get("registry_path"):
+        # A device on the tailnet we do not operate as infrastructure: it belongs
+        # on the graph, but calling a laptop "undocumented drift" makes the drift
+        # number meaningless. Documented peers correlate earlier and never land here.
+        return "observed", ["tailnet peer"], []
     if node.get("_unregistered"):
         return "unregistered", [str(node.get("drift_reason") or "alive, no registry entry")], []
     if str(node.get("doc_status") or "active") == "removed":
@@ -171,6 +176,24 @@ def _classify(node: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]
     if kind == "project" or not node.get("_probed") or not (node.get("probe") or (node.get("host_ip") and node.get("ports"))):
         return "doc_only", [], []
     return "stale", ["registry says active, nothing answered the probe"], []
+
+
+# Which ``managed_by`` values each collector owns. A sweep prunes only inside
+# the families of the collectors that ran, so partial sweeps stay additive.
+_OWNER_FAMILIES: dict[str, set[str]] = {
+    "local": {"host", "systemd-user", "systemd-system", "docker", "tailscale"},
+    "headscale": {"headscale", "tailscale"},
+    "proxmox": {"proxmox"},
+    "hermes": {"hermes", "hermes-config", "hermes-cron", "mcp"},
+    "fixture": set(),  # the demo fleet is a view: it never prunes anything
+}
+
+
+def _owner_families(sources: list[str]) -> set[str]:
+    owners: set[str] = set()
+    for source in sources:
+        owners |= _OWNER_FAMILIES.get(str(source), set())
+    return owners
 
 
 def _probe_targets(nodes: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -335,7 +358,13 @@ def run_sweep(
     store.begin_bulk()
     try:
         store.upsert_nodes(persisted)
-        store.delete_nodes_except([node["id"] for node in persisted])
+        # Drop only what the collectors that actually ran stopped reporting.
+        # A sweep restricted to one source must not erase the others' nodes (a
+        # demo swing would otherwise wipe the real inventory until the next
+        # full sweep), and a documented node always survives as doc_only.
+        owners = _owner_families(requested)
+        if owners:
+            store.prune_live_nodes(owners, [node["id"] for node in persisted])
         store.replace_edges(_edges_for(nodes, doc_edges, live.edges))
         for observation in probe_result.nodes:
             store.insert_probe_sample(

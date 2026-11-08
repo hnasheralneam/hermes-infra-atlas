@@ -10,6 +10,8 @@ the very case the plugin is meant to surface.
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 import time
 from typing import Any, Optional
 
@@ -18,6 +20,75 @@ from . import matcher
 from .store import get_store
 
 logger = logging.getLogger(__name__)
+
+# Activity telemetry is an observer: a locked database must cost a dropped row,
+# never a delayed tool result. A daemon thread drains the queue off the hot path.
+_activity_queue: "queue.Queue[tuple]" = queue.Queue(maxsize=1000)
+_activity_worker: Optional[threading.Thread] = None
+_ACTIVITY_IDLE_EXIT_SECONDS = 5.0
+_activity_lock = threading.Lock()
+
+
+def _start_activity_worker() -> None:
+    global _activity_worker
+    with _activity_lock:
+        if _activity_worker and _activity_worker.is_alive():
+            return
+        worker = threading.Thread(target=_drain_activity, name="infra-atlas-activity", daemon=True)
+        _activity_worker = worker
+        worker.start()
+
+
+def _drain_activity() -> None:
+    from .store import get_store  # local import: the worker outlives the first call
+
+    while True:
+        try:
+            entry = _activity_queue.get(timeout=_ACTIVITY_IDLE_EXIT_SECONDS)
+        except queue.Empty:
+            return  # idle: exit, so a reloaded plugin never keeps a stale worker (and connection) alive
+        if entry is None:
+            return
+        args, kwargs = entry
+        try:
+            get_store().log_activity(*args, **kwargs)
+        except Exception:  # noqa: BLE001 - telemetry never breaks the agent
+            logger.debug("infra-atlas: activity write dropped", exc_info=True)
+        finally:
+            _activity_queue.task_done()
+
+
+def _enqueue_activity(*args: Any, **kwargs: Any) -> None:
+    _start_activity_worker()
+    try:
+        _activity_queue.put_nowait((args, kwargs))
+    except queue.Full:
+        logger.debug("infra-atlas: activity queue full, dropping entry")
+
+
+def drain_activity(timeout: float = 2.0) -> None:
+    """Test/CLI helper: wait for queued telemetry to reach the database."""
+    _start_activity_worker()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _activity_queue.unfinished_tasks == 0:
+            return
+        time.sleep(0.01)
+
+
+def _has_read(store, session: str, node_id: str) -> bool:
+    """Whether this session read the entry.
+
+    Hot-path reads go through a read-only connection with a 200 ms budget; if it
+    cannot answer, the call is allowed (fail open) — a knowledge-base read must
+    never be the reason an agent cannot work.
+    """
+    ro = getattr(store, "has_session_read_ro", None)
+    if ro is not None:
+        answer = ro(session, node_id)
+        return True if answer is None else bool(answer)
+    return bool(store.has_session_read(session, node_id))
+
 
 _BLOCK_PREFIX = "[Infra Atlas Guardrail — Read Before You Touch]"
 
@@ -102,7 +173,7 @@ def on_pre_tool_call(
         documented = [node for node in nodes if node.get("registry_path")]
         if not documented:
             return None
-        unread = [node for node in documented if not store.has_session_read(session, node["id"])]
+        unread = [node for node in documented if not _has_read(store, session, node["id"])]
         if not unread:
             return None
 
@@ -111,7 +182,7 @@ def on_pre_tool_call(
         if mode == "warn":
             for node in unread:
                 _remember(session, tool_name, node["id"], "touch_warned")
-                store.log_activity(
+                _enqueue_activity(
                     session,
                     tool_name,
                     node["id"],
@@ -151,7 +222,7 @@ def on_pre_tool_call(
 
         for node in unread:
             _remember(session, tool_name, node["id"], "touch_blocked")
-            store.log_activity(
+            _enqueue_activity(
                 session,
                 tool_name,
                 node["id"],
@@ -205,7 +276,7 @@ def on_post_tool_call(
                 # pre_tool_call already recorded (and broadcast) this decision;
                 # post_tool_call fires even for a vetoed call.
                 continue
-            store.log_activity(
+            _enqueue_activity(
                 session,
                 tool_name,
                 node["id"],

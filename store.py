@@ -167,6 +167,11 @@ class AtlasStore:
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._bulk = False
+        # Hooks read through their own read-only connection: in WAL a reader never
+        # waits on a writer, so a running sweep cannot stall the guardrail.
+        self._ro_conn: Optional[sqlite3.Connection] = None
+        self._ro_lock = threading.RLock()  # list_nodes_ro re-enters _readonly_conn
+        self._db_path: str = ""
 
     def _commit(self) -> None:
         if not self._bulk:
@@ -181,12 +186,12 @@ class AtlasStore:
         Retry briefly, then roll back so the lock is released either way.
         """
         delay = 0.05
-        for attempt in range(6):
+        for attempt in range(4):
             try:
                 self.conn.commit()
                 return
             except sqlite3.OperationalError as exc:
-                if "locked" not in str(exc).lower() or attempt == 5:
+                if "locked" not in str(exc).lower() or attempt == 3:
                     try:
                         self.conn.rollback()
                     except sqlite3.Error:
@@ -203,7 +208,7 @@ class AtlasStore:
         half-transaction we were in) covers a peer that left a long write open.
         """
         delay = 0.05
-        for attempt in range(7):
+        for attempt in range(4):
             with self._lock:
                 try:
                     return self.conn.execute(sql, params)
@@ -218,7 +223,7 @@ class AtlasStore:
                         self.conn.rollback()
                     except sqlite3.Error:
                         pass
-                    if not locked or attempt == 6:
+                    if not locked or attempt == 3:
                         raise
             time.sleep(delay)
             delay = min(delay * 2, 1.5)
@@ -233,7 +238,7 @@ class AtlasStore:
         stealing the lock between two statements here.
         """
         delay = 0.05
-        for attempt in range(7):
+        for attempt in range(4):
             with self._lock:
                 try:
                     if not self.conn.in_transaction:
@@ -241,7 +246,7 @@ class AtlasStore:
                     self._bulk = True
                     return
                 except sqlite3.OperationalError as exc:
-                    if "locked" not in str(exc).lower() or attempt == 6:
+                    if "locked" not in str(exc).lower() or attempt == 3:
                         raise
             time.sleep(delay)
             delay = min(delay * 2, 1.5)
@@ -267,6 +272,44 @@ class AtlasStore:
                     self._init_schema()
         return self._conn
 
+    def _readonly_conn(self) -> sqlite3.Connection:
+        with self._ro_lock:
+            if self._ro_conn is None:
+                path = self._db_path
+                if not path:
+                    raise sqlite3.OperationalError("no database file to open read-only")
+                conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA busy_timeout=200")
+                self._ro_conn = conn
+            return self._ro_conn
+
+    def list_nodes_ro(self) -> list[dict[str, Any]]:
+        """Nodes for hot paths (hooks): never blocks behind a writer, never raises."""
+        try:
+            with self._ro_lock:
+                rows = self._readonly_conn().execute("SELECT * FROM nodes").fetchall()
+            return [_row_to_node(row) for row in rows]
+        except sqlite3.Error as exc:
+            # Fail open: the hook calling this would rather have an empty graph
+            # (nothing to block) than block the agent on a busy database.
+            logging.getLogger(__name__).debug("infra-atlas: read-only node read failed: %s", exc)
+            return []
+
+    def has_session_read_ro(self, session_id: str, node_id: str) -> Optional[bool]:
+        """``None`` when the read could not be answered (the caller fails open)."""
+        if not session_id:
+            return False
+        try:
+            with self._ro_lock:
+                row = self._readonly_conn().execute(
+                    "SELECT 1 FROM session_reads WHERE session_id = ? AND node_id = ? LIMIT 1",
+                    (session_id, node_id),
+                ).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return None
+
     def _init_schema(self) -> None:
         assert self._conn is not None
         # Several Hermes processes (gateway, CLI sessions, cron) can share one
@@ -274,27 +317,24 @@ class AtlasStore:
         # everyone else fails instantly with "database is locked" — which showed
         # up as infra_query silently failing to record a read, so the guardrail
         # kept blocking work the agent had already looked up.
-        self._conn.execute("PRAGMA busy_timeout=8000")
+        self._conn.execute("PRAGMA busy_timeout=1500")
+        row = self._conn.execute("PRAGMA database_list").fetchone()
+        self._db_path = str(row[2]) if row and row[2] else ""
         self._conn.executescript(SCHEMA)
         self._conn.commit()
 
     def _write(self, sql: str, params: tuple[Any, ...] = ()) -> None:
-        """Run one write, retrying briefly while another process holds the lock."""
-        delay = 0.05
-        for attempt in range(6):
-            with self._lock:
-                try:
-                    self._run(sql, params)
-                    self._commit()
-                    return
-                except sqlite3.OperationalError as exc:
-                    if "locked" not in str(exc).lower() or attempt == 5:
-                        raise
-            time.sleep(delay)
-            delay *= 2
+        """One write. ``_run`` already retries and releases the lock on failure."""
+        self._run(sql, params)
+        self._commit()
 
     def close(self) -> None:
         with self._lock:
+            if self._ro_conn is not None:
+                try:
+                    self._ro_conn.close()
+                finally:
+                    self._ro_conn = None
             if self._conn is not None:
                 try:
                     self._conn.close()
@@ -446,6 +486,33 @@ class AtlasStore:
                 marks = ",".join("?" for _ in keep)
                 self._run(f"DELETE FROM nodes WHERE id NOT IN ({marks})", keep)
             self.conn.commit()
+
+    def prune_live_nodes(self, owners: Iterable[str], keep_ids: Iterable[str]) -> int:
+        """Delete live-only nodes a collector stopped reporting.
+
+        Only rows owned by ``owners`` are candidates, and a node with a
+        ``registry_path`` is never deleted: the registry keeps documenting it even
+        while nothing answers, so it stays on the graph as ``doc_only``.
+        """
+        owner_set = {owner for owner in owners if owner}
+        keep = set(keep_ids)
+        if not owner_set:
+            return 0
+        with self._lock:
+            rows = self._run("SELECT id, managed_by, registry_path FROM nodes").fetchall()
+            doomed = [
+                row["id"]
+                for row in rows
+                if (row["managed_by"] or "") in owner_set
+                and not row["registry_path"]
+                and row["id"] not in keep
+            ]
+            for node_id in doomed:
+                self._run("DELETE FROM nodes WHERE id = ?", (node_id,))
+                self._run("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
+            if doomed:
+                self.conn.commit()
+            return len(doomed)
 
     # -- edges ----------------------------------------------------------
     def replace_edges(self, edges: Iterable[dict[str, Any]]) -> None:
