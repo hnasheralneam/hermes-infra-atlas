@@ -172,10 +172,51 @@ class AtlasStore:
         if not self._bulk:
             self.conn.commit()
 
+    def _run(self, sql: str, params: Any = ()) -> sqlite3.Cursor:
+        """Execute one statement, waiting out a peer's lock instead of failing.
+
+        Several Hermes processes share this database. ``busy_timeout`` covers a
+        peer that is mid-write; the retry (and the rollback that releases whatever
+        half-transaction we were in) covers a peer that left a long write open.
+        """
+        delay = 0.05
+        for attempt in range(7):
+            with self._lock:
+                try:
+                    return self.conn.execute(sql, params)
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == 6:
+                        raise
+                    self._bulk = False
+                    try:
+                        self.conn.rollback()
+                    except sqlite3.Error:
+                        pass
+            time.sleep(delay)
+            delay = min(delay * 2, 1.5)
+        raise RuntimeError("unreachable")
+
     def begin_bulk(self) -> None:
-        """One transaction for a whole sweep (node writes + probe samples + edges)."""
-        with self._lock:
-            self._bulk = True
+        """One transaction for a whole sweep (node writes + probe samples + edges).
+
+        It starts with ``BEGIN IMMEDIATE`` so the sweep owns the write lock for
+        its whole duration: a peer that writes concurrently (the gateway logging
+        tool activity, another session's sweep) waits at its own BEGIN instead of
+        stealing the lock between two statements here.
+        """
+        delay = 0.05
+        for attempt in range(7):
+            with self._lock:
+                try:
+                    if not self.conn.in_transaction:
+                        self._run("BEGIN IMMEDIATE")
+                    self._bulk = True
+                    return
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == 6:
+                        raise
+            time.sleep(delay)
+            delay = min(delay * 2, 1.5)
 
     def end_bulk(self) -> None:
         with self._lock:
@@ -213,7 +254,7 @@ class AtlasStore:
         for attempt in range(6):
             with self._lock:
                 try:
-                    self.conn.execute(sql, params)
+                    self._run(sql, params)
                     self._commit()
                     return
                 except sqlite3.OperationalError as exc:
@@ -282,7 +323,7 @@ class AtlasStore:
             columns = ", ".join(values)
             placeholders = ", ".join(f":{c}" for c in values)
             updates = ", ".join(f"{c}=excluded.{c}" for c in values if c != "id")
-            self.conn.execute(
+            self._run(
                 f"INSERT INTO nodes ({columns}) VALUES ({placeholders}) "
                 f"ON CONFLICT(id) DO UPDATE SET {updates}",
                 values,
@@ -305,12 +346,12 @@ class AtlasStore:
         assignments = ", ".join(f"{key}=:{key}" for key in payload)
         payload["id"] = node_id
         with self._lock:
-            self.conn.execute(f"UPDATE nodes SET {assignments} WHERE id=:id", payload)
+            self._run(f"UPDATE nodes SET {assignments} WHERE id=:id", payload)
             self._commit()
 
     def get_node(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
-            row = self.conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            row = self._run("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
         return _row_to_node(row) if row else None
 
     def find_node(self, text: str) -> Optional[dict[str, Any]]:
@@ -322,7 +363,7 @@ class AtlasStore:
             return node
         needle = text.strip().lower()
         with self._lock:
-            rows = self.conn.execute("SELECT * FROM nodes").fetchall()
+            rows = self._run("SELECT * FROM nodes").fetchall()
         candidates = []
         for row in rows:
             node = _row_to_node(row)
@@ -358,7 +399,7 @@ class AtlasStore:
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         with self._lock:
-            rows = self.conn.execute(sql, params).fetchall()
+            rows = self._run(sql, params).fetchall()
         return [_row_to_node(row) for row in rows]
 
     def upsert_nodes(self, nodes: Iterable[dict[str, Any]]) -> None:
@@ -370,21 +411,21 @@ class AtlasStore:
         keep = list(keep_ids)
         with self._lock:
             if not keep:
-                self.conn.execute("DELETE FROM nodes")
+                self._run("DELETE FROM nodes")
             else:
                 marks = ",".join("?" for _ in keep)
-                self.conn.execute(f"DELETE FROM nodes WHERE id NOT IN ({marks})", keep)
+                self._run(f"DELETE FROM nodes WHERE id NOT IN ({marks})", keep)
             self.conn.commit()
 
     # -- edges ----------------------------------------------------------
     def replace_edges(self, edges: Iterable[dict[str, Any]]) -> None:
         now = _now()
         with self._lock:
-            self.conn.execute("DELETE FROM edges")
+            self._run("DELETE FROM edges")
             for edge in edges:
                 if not edge.get("source_id") or not edge.get("target_id") or not edge.get("relation"):
                     continue
-                self.conn.execute(
+                self._run(
                     "INSERT OR REPLACE INTO edges (source_id, target_id, relation, origin, metadata_json, updated_at)"
                     " VALUES (?, ?, ?, ?, ?, ?)",
                     (
@@ -400,7 +441,7 @@ class AtlasStore:
 
     def list_edges(self) -> list[dict[str, Any]]:
         with self._lock:
-            rows = self.conn.execute("SELECT * FROM edges").fetchall()
+            rows = self._run("SELECT * FROM edges").fetchall()
         out = []
         for row in rows:
             edge = dict(row)
@@ -426,19 +467,19 @@ class AtlasStore:
         if not session_id:
             return False
         with self._lock:
-            row = self.conn.execute(
+            row = self._run(
                 "SELECT 1 FROM session_reads WHERE session_id = ? AND node_id = ?", (session_id, node_id)
             ).fetchone()
         return row is not None
 
     def session_reads(self) -> list[dict[str, Any]]:
         with self._lock:
-            rows = self.conn.execute("SELECT * FROM session_reads").fetchall()
+            rows = self._run("SELECT * FROM session_reads").fetchall()
         return [dict(row) for row in rows]
 
     def clear_session(self, session_id: str) -> None:
         with self._lock:
-            self.conn.execute("DELETE FROM session_reads WHERE session_id = ?", (session_id,))
+            self._run("DELETE FROM session_reads WHERE session_id = ?", (session_id,))
             self.conn.commit()
 
     # -- activity -------------------------------------------------------
@@ -472,19 +513,19 @@ class AtlasStore:
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(int(limit))
         with self._lock:
-            rows = self.conn.execute(sql, params).fetchall()
+            rows = self._run(sql, params).fetchall()
         return [dict(row) for row in rows]
 
     # -- probes / uptime ------------------------------------------------
     def record_probe(self, node_id: str, status: str, latency_ms: Optional[float], detail: str = "") -> None:
         now = _now()
         with self._lock:
-            self.conn.execute(
+            self._run(
                 "INSERT INTO probe_samples (ts, node_id, status, latency_ms, detail) VALUES (?, ?, ?, ?, ?)",
                 (now, node_id, status, latency_ms, detail[:300]),
             )
             window_start = now - 86400
-            row = self.conn.execute(
+            row = self._run(
                 "SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up"
                 " FROM probe_samples WHERE node_id = ? AND ts >= ?",
                 (node_id, window_start),
@@ -492,7 +533,7 @@ class AtlasStore:
             total = int(row["total"] or 0)
             up = int(row["up"] or 0)
             uptime = round((up / total) * 100.0, 2) if total else 100.0
-            self.conn.execute(
+            self._run(
                 "UPDATE nodes SET health_status = ?, latency_ms = ?, uptime_24h_pct = ?, last_seen_live_at = ?,"
                 " updated_at = ? WHERE id = ?",
                 (
@@ -508,16 +549,16 @@ class AtlasStore:
 
     def bump_failure_streak(self, node_id: str) -> int:
         with self._lock:
-            self.conn.execute(
+            self._run(
                 "UPDATE nodes SET failure_streak = failure_streak + 1, updated_at = ? WHERE id = ?", (_now(), node_id)
             )
-            row = self.conn.execute("SELECT failure_streak FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            row = self._run("SELECT failure_streak FROM nodes WHERE id = ?", (node_id,)).fetchone()
             self.conn.commit()
         return int(row["failure_streak"]) if row else 0
 
     def reset_failure_streak(self, node_id: str) -> None:
         with self._lock:
-            self.conn.execute("UPDATE nodes SET failure_streak = 0, updated_at = ? WHERE id = ?", (_now(), node_id))
+            self._run("UPDATE nodes SET failure_streak = 0, updated_at = ? WHERE id = ?", (_now(), node_id))
             self.conn.commit()
 
     def insert_probe_sample(
@@ -530,7 +571,7 @@ class AtlasStore:
     ) -> None:
         """Append one sample without recomputing node uptime (history/demo loads)."""
         with self._lock:
-            self.conn.execute(
+            self._run(
                 "INSERT INTO probe_samples (ts, node_id, status, latency_ms, detail) VALUES (?, ?, ?, ?, ?)",
                 (float(ts or _now()), node_id, status, latency_ms, str(detail or "")[:300]),
             )
@@ -538,7 +579,7 @@ class AtlasStore:
 
     def probe_history(self, node_id: str, limit: int = 30) -> list[dict[str, Any]]:
         with self._lock:
-            rows = self.conn.execute(
+            rows = self._run(
                 "SELECT ts, status, latency_ms, detail FROM probe_samples WHERE node_id = ? ORDER BY id DESC LIMIT ?",
                 (node_id, int(limit)),
             ).fetchall()
@@ -546,10 +587,10 @@ class AtlasStore:
 
     def fleet_uptime(self) -> dict[str, Any]:
         with self._lock:
-            row = self.conn.execute(
+            row = self._run(
                 "SELECT AVG(uptime_24h_pct) AS avg, COUNT(*) AS nodes FROM nodes WHERE uptime_24h_pct IS NOT NULL"
             ).fetchone()
-            down = self.conn.execute(
+            down = self._run(
                 "SELECT COUNT(*) AS n FROM nodes WHERE health_status = 'down'"
             ).fetchone()
         return {
@@ -561,8 +602,8 @@ class AtlasStore:
     def prune_probe_samples(self, keep_per_node: int = 200, days: int = 7) -> None:
         cutoff = _now() - days * 86400
         with self._lock:
-            self.conn.execute("DELETE FROM probe_samples WHERE ts < ?", (cutoff,))
-            self.conn.execute(
+            self._run("DELETE FROM probe_samples WHERE ts < ?", (cutoff,))
+            self._run(
                 "DELETE FROM probe_samples WHERE id NOT IN ("
                 " SELECT id FROM (SELECT id, node_id, ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY id DESC) AS rn"
                 " FROM probe_samples) WHERE rn <= ?)",
@@ -581,13 +622,13 @@ class AtlasStore:
     ) -> dict[str, Any]:
         now = _now()
         with self._lock:
-            row = self.conn.execute(
+            row = self._run(
                 "SELECT * FROM incidents WHERE node_id = ? AND status IN ('open', 'healing', 'escalated')"
                 " ORDER BY id DESC LIMIT 1",
                 (node_id,),
             ).fetchone()
             if row:
-                self.conn.execute(
+                self._run(
                     "UPDATE incidents SET failure_count = ?, trigger_error = ?, root_cause_hint = ?, updated_at = ?"
                     " WHERE id = ?",
                     (failure_count, trigger_error[:500], root_cause_hint, now, row["id"]),
@@ -595,26 +636,26 @@ class AtlasStore:
                 self.conn.commit()
                 incident_id = row["id"]
             else:
-                cur = self.conn.execute(
+                cur = self._run(
                     "INSERT INTO incidents (node_id, node_label, status, started_at, failure_count, trigger_error,"
                     " root_cause_hint, updated_at) VALUES (?, ?, 'open', ?, ?, ?, ?, ?)",
                     (node_id, node_label, now, failure_count, trigger_error[:500], root_cause_hint, now),
                 )
                 self.conn.commit()
                 incident_id = cur.lastrowid
-            fresh = self.conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            fresh = self._run("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         return dict(fresh)
 
     def create_incident_row(self, incident: dict[str, Any]) -> Optional[int]:
         """Insert a fully-formed incident row (fixture/demo loads)."""
         with self._lock:
-            existing = self.conn.execute(
+            existing = self._run(
                 "SELECT id FROM incidents WHERE node_id = ? AND status = ? AND trigger_error = ?",
                 (incident.get("node_id"), incident.get("status"), incident.get("trigger_error")),
             ).fetchone()
             if existing:
                 return int(existing["id"])
-            cur = self.conn.execute(
+            cur = self._run(
                 "INSERT INTO incidents (node_id, node_label, status, started_at, resolved_at, failure_count,"
                 " trigger_error, root_cause_hint, heal_attempts, last_heal_action, resolution_summary, updated_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -638,12 +679,12 @@ class AtlasStore:
 
     def get_incident(self, incident_id: int) -> Optional[dict[str, Any]]:
         with self._lock:
-            row = self.conn.execute("SELECT * FROM incidents WHERE id = ?", (int(incident_id),)).fetchone()
+            row = self._run("SELECT * FROM incidents WHERE id = ?", (int(incident_id),)).fetchone()
         return dict(row) if row else None
 
     def active_incident_for(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
-            row = self.conn.execute(
+            row = self._run(
                 "SELECT * FROM incidents WHERE node_id = ? AND status IN ('open', 'healing', 'escalated')"
                 " ORDER BY id DESC LIMIT 1",
                 (node_id,),
@@ -658,7 +699,7 @@ class AtlasStore:
         assignments = ", ".join(f"{key}=:{key}" for key in payload)
         payload["id"] = int(incident_id)
         with self._lock:
-            self.conn.execute(f"UPDATE incidents SET {assignments} WHERE id=:id", payload)
+            self._run(f"UPDATE incidents SET {assignments} WHERE id=:id", payload)
             self.conn.commit()
 
     def list_incidents(self, statuses: Optional[Iterable[str]] = None, limit: int = 50, node_id: Optional[str] = None) -> list[dict[str, Any]]:
@@ -676,13 +717,13 @@ class AtlasStore:
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(int(limit))
         with self._lock:
-            rows = self.conn.execute(sql, params).fetchall()
+            rows = self._run(sql, params).fetchall()
         return [dict(row) for row in rows]
 
     # -- sweeps / drift -------------------------------------------------
     def record_sweep(self, duration_ms: int, sources: list[str], counts: dict[str, int], summary: str) -> int:
         with self._lock:
-            cur = self.conn.execute(
+            cur = self._run(
                 "INSERT INTO sweeps (ts, duration_ms, sources_json, counts_json, summary) VALUES (?, ?, ?, ?, ?)",
                 (_now(), int(duration_ms), json.dumps(sources), json.dumps(counts), summary[:800]),
             )
@@ -691,7 +732,7 @@ class AtlasStore:
 
     def latest_sweep(self) -> Optional[dict[str, Any]]:
         with self._lock:
-            row = self.conn.execute("SELECT * FROM sweeps ORDER BY id DESC LIMIT 1").fetchone()
+            row = self._run("SELECT * FROM sweeps ORDER BY id DESC LIMIT 1").fetchone()
         if not row:
             return None
         sweep = dict(row)
@@ -710,7 +751,7 @@ class AtlasStore:
         evidence: str,
     ) -> None:
         with self._lock:
-            self.conn.execute(
+            self._run(
                 "INSERT INTO drift_events (sweep_id, ts, node_id, node_label, prev_drift, new_drift, field_diffs_json, evidence)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (sweep_id, _now(), node_id, node_label, prev_drift, new_drift, json.dumps(field_diffs), evidence[:800]),
@@ -726,7 +767,7 @@ class AtlasStore:
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(int(limit))
         with self._lock:
-            rows = self.conn.execute(sql, params).fetchall()
+            rows = self._run(sql, params).fetchall()
         out = []
         for row in rows:
             event = dict(row)
@@ -736,7 +777,7 @@ class AtlasStore:
 
     def counts(self) -> dict[str, int]:
         with self._lock:
-            rows = self.conn.execute("SELECT drift_status, COUNT(*) AS n FROM nodes GROUP BY drift_status").fetchall()
+            rows = self._run("SELECT drift_status, COUNT(*) AS n FROM nodes GROUP BY drift_status").fetchall()
         counts = {"matched": 0, "changed": 0, "unregistered": 0, "stale": 0, "doc_only": 0}
         for row in rows:
             counts[row["drift_status"]] = int(row["n"])

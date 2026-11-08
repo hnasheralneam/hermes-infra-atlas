@@ -177,3 +177,18 @@ def test_writes_wait_for_another_process_holding_the_lock(plugin_home):
 
     assert "error" not in result, result
     assert result.get("ok") is True
+
+
+def test_bulk_sweep_holds_the_write_lock_from_the_start(plugin_home):
+    """BEGIN IMMEDIATE up front: peers wait at their own BEGIN instead of
+    grabbing the lock between two statements of a running sweep."""
+    H.load_plugin()
+    store = H.submodule("store").get_store()
+
+    store.begin_bulk()
+    assert store.conn.in_transaction, "a bulk sweep must own the write transaction"
+    store.upsert_node({"id": "node-bulk", "label": "bulk", "kind": "service"})
+    assert store.conn.in_transaction, "writing inside the bulk must not commit early"
+    store.end_bulk()
+    assert not store.conn.in_transaction, "end_bulk must commit"
+    assert store.get_node("node-bulk")["label"] == "bulk"

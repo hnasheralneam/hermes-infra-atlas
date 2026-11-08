@@ -326,7 +326,7 @@ function select(label, value, options, onChange) {
       jsx('select', {
         value: value || options[0],
         onChange: event => onChange(event.target.value),
-        children: options.map(option => jsx('option', { value: option, children: option }))
+        children: options.map(option => jsx('option', { value: option, children: option }, option))
       })
     ]
   })
@@ -411,14 +411,14 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
             const position = positioned.get(node.id)
             if (!position) return null
             const pulse = pulseFor(node.id)
-            return NodeCard({
+            return React.cloneElement(NodeCard({
               node,
               x: position.x,
               y: position.y,
               active: node.id === selectedId,
               pulse,
               onSelect
-            })
+            }), { key: node.id })
           })
         ]
       })
@@ -633,7 +633,8 @@ function Inspector({ node, busy, onClose, onRefetch, setBusy, guardrail }) {
         children: [
           tabButton('overview', 'Overview & diff', tab, setTab),
           tabButton('uptime', 'Uptime & auto-heal', tab, setTab),
-          tabButton('runbook', 'Runbook', tab, setTab)
+          tabButton('runbook', 'Runbook', tab, setTab),
+          tabButton('raw', 'Raw JSON', tab, setTab)
         ]
       }),
       jsxs('div', {
@@ -643,7 +644,8 @@ function Inspector({ node, busy, onClose, onRefetch, setBusy, guardrail }) {
           tab === 'uptime'
             ? UptimeTab({ item, probes, incidents, busy, nodeId: node.id, setBusy, onRefetch, detail })
             : null,
-          tab === 'runbook' ? RunbookTab({ item, markdown: data.registry_markdown, pitfalls: item.pitfalls_summary }) : null
+          tab === 'runbook' ? RunbookTab({ item, markdown: data.registry_markdown, pitfalls: item.pitfalls_summary }) : null,
+          tab === 'raw' ? RawTab({ data }) : null
         ]
       }),
       jsxs('div', {
@@ -873,6 +875,13 @@ function RunbookTab({ item, markdown, pitfalls }) {
   })
 }
 
+function RawTab({ data }) {
+  return jsx('pre', {
+    className: 'ia-runbook ia-json',
+    children: JSON.stringify(data || {}, null, 2)
+  })
+}
+
 function ActivityStream({ entries, incidents }) {
   const rows = (entries || []).slice(0, 12)
   return jsxs('div', {
@@ -918,19 +927,37 @@ const format = value => {
 // ── status bar ─────────────────────────────────────────────────────────────
 function AtlasChip() {
   const { data } = useGraph(15000)
+  const [flash, setFlash] = React.useState('')
   const counts = (data && data.counts) || {}
   const incidents = ((data && data.incidents) || []).length
   const total = counts.total || 0
   const healthy = counts.matched || 0
   const attention = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
+
+  // A vetoed tool call is the moment the operator most wants to see: flash the
+  // chip instead of waiting for the next poll to change a number.
+  React.useEffect(() => {
+    if (!API) return undefined
+    return API.onEvent('plugin.infra-atlas.activity', frame => {
+      const payload = (frame && frame.payload) || frame || {}
+      if (payload.action_kind !== 'touch_blocked') return
+      setFlash('block')
+      const timer = API.setTimeout ? API.setTimeout(() => setFlash(''), 4000) : setTimeout(() => setFlash(''), 4000)
+      return () => {
+        if (typeof timer === 'function') timer()
+      }
+    })
+  }, [])
+
+  const label = total
+    ? `${incidents ? '🚨' : '◉'} Atlas ${healthy}/${total}${attention ? ` · ${attention} drift` : ''}${incidents ? ` · ${incidents} down` : ''}`
+    : '◉ Atlas'
   return jsx('button', {
     type: 'button',
-    className: cn('ia-chip', incidents && 'ia-chip-alert'),
-    title: 'Infra Atlas — open the infrastructure graph',
+    className: cn('ia-chip', incidents && 'ia-chip-alert', flash === 'block' && 'ia-chip-blocked'),
+    title: flash === 'block' ? 'Infra Atlas — a tool call was blocked: read the registry entry first' : 'Infra Atlas — open the infrastructure graph',
     onClick: () => host.navigate(PAGE_PATH),
-    children: total
-      ? `${incidents ? '🚨' : '◉'} Atlas ${healthy}/${total}${attention ? ` · ${attention} drift` : ''}${incidents ? ` · ${incidents} down` : ''}`
-      : '◉ Atlas'
+    children: flash === 'block' ? `⛔ ${label}` : label
   })
 }
 
@@ -1089,6 +1116,13 @@ const CSS = `
 .ia-node-badge { font-size:8px; letter-spacing:.04em; text-transform:uppercase; }
 .ia-ring { animation:ia-ring-pulse 1.4s ease-out 4; transform-origin:center; }
 @keyframes ia-ring-pulse { 0% { opacity:.9; r:20; } 100% { opacity:0; r:44; } }
+/* Live agent overlay: blocked calls shake, reads and touches pulse their kind. */
+.ia-pulse-touch_blocked .ia-node-rect { animation:ia-shake .42s ease-in-out 3; }
+@keyframes ia-shake { 0%,100% { transform:translateX(0); } 25% { transform:translateX(-3.5px); } 75% { transform:translateX(3.5px); } }
+.ia-pulse-touch_allowed .ia-node-rect { animation:ia-flash-allowed 1.5s ease-out 1; }
+@keyframes ia-flash-allowed { 0% { stroke-width:3.4; } 100% { stroke-width:1.3; } }
+.ia-pulse-read_doc .ia-node-rect { animation:ia-flash-read 1.5s ease-out 1; }
+@keyframes ia-flash-read { 0% { stroke-width:3.4; stroke-dasharray:6 3; } 100% { stroke-width:1.3; stroke-dasharray:none; } }
 .ia-empty { display:flex; align-items:center; justify-content:center; height:100%; padding:24px; text-align:center; color:var(--ui-text-quaternary, #6b7280); }
 .ia-inspector { width:352px; flex:0 0 352px; border-left:1px solid var(--ui-stroke-secondary, rgba(128,128,128,.22)); display:flex; flex-direction:column; min-height:0; }
 .ia-inspector-empty { padding:16px; gap:8px; }
@@ -1137,6 +1171,9 @@ const CSS = `
 .ia-chip { font-size:11px; padding:0 6px; color:var(--ui-text-tertiary, #9ca3af); background:transparent; border:none; cursor:pointer; }
 .ia-chip:hover { color:var(--ui-text-primary, inherit); }
 .ia-chip-alert { color:var(--ui-danger, #ef4444); }
+.ia-chip-blocked { color:var(--ui-danger, #ef4444); animation:ia-chip-flash .9s ease-in-out 4; }
+@keyframes ia-chip-flash { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+.ia-json { font-size:10px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
 .ia-card { border:1px solid var(--ui-stroke-secondary, rgba(128,128,128,.24)); border-radius:10px; padding:9px 11px; display:flex; flex-direction:column; gap:6px; font-size:11px; }
 .ia-card-head { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
 .ia-card-dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
