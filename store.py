@@ -211,7 +211,12 @@ class AtlasStore:
         for attempt in range(4):
             with self._lock:
                 try:
-                    return self.conn.execute(sql, params)
+                    cursor = self.conn.execute(sql, params)
+                    # Never leave an implicit transaction open: a half-open
+                    # transaction in one Hermes process blocks every other one.
+                    if not self._bulk and self.conn.in_transaction:
+                        self._commit_with_retry()
+                    return cursor
                 except sqlite3.IntegrityError:
                     raise  # a duplicate is a caller concern: the transaction stays usable
                 except sqlite3.OperationalError as exc:
@@ -242,7 +247,8 @@ class AtlasStore:
             with self._lock:
                 try:
                     if not self.conn.in_transaction:
-                        self._run("BEGIN IMMEDIATE")
+                        # Raw execute: _run would auto-commit the BEGIN it just issued.
+                        self.conn.execute("BEGIN IMMEDIATE")
                     self._bulk = True
                     return
                 except sqlite3.OperationalError as exc:
@@ -266,8 +272,13 @@ class AtlasStore:
                 if self._conn is None:
                     from plugins.plugin_storage import plugin_db
 
-                    conn = plugin_db(PLUGIN_ID)
+                    conn = plugin_db(PLUGIN_ID, filename="atlas.db")
                     conn.row_factory = sqlite3.Row
+                    # Autocommit: a statement can never leave an implicit transaction
+                    # open. Bulk sweeps begin one explicitly (BEGIN IMMEDIATE), and a
+                    # forgotten commit used to lock the database for every Hermes
+                    # process until it restarted.
+                    conn.isolation_level = None
                     self._conn = conn
                     self._init_schema()
         return self._conn
