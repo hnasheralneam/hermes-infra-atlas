@@ -143,11 +143,42 @@ node tools/render_smoke.mjs --modules /path/to/a/node_modules   # needs react + 
 ```
 
 It renders every registered surface (page, chip, both transcript cards) with
-`react-dom/server` against a stubbed `@hermes/plugin-sdk` and fails on any crash.
-Eight of eight surfaces render on this tree.
+`react-dom/server` against a stubbed `@hermes/plugin-sdk`, fails on any crash,
+and asserts that the page actually renders the isometric scene (platforms,
+per-kind shapes, routed edges, packets). Eight of eight surfaces render on this
+tree.
 
-The topology is drawn as SVG rather than a canvas: it scales with `viewBox`
-instead of a `ResizeObserver` + `devicePixelRatio` dance, keeps the nodes
-selectable and keyboard-reachable, and stays crisp at any zoom.
+### The isometric topology
+
+The page draws the fleet as a **terraced isometric diorama** (SVG, `viewBox`
+pan/zoom — still selectable, keyboard-reachable and crisp at any zoom):
+
+- One terrace per stratum (hardware → compute → services → agents), cascading
+  downhill toward the viewer so dependency edges literally flow down the hill.
+  Terrace fronts drop to the base plane and slope risers fuse them into one
+  landmass.
+- Every node kind is its own 3-D silhouette: server = LED-blinking rack,
+  VM = tower with a scanning screen, LXC = tank whose liquid level tracks
+  uptime, container = humming corrugated cargo box, service = pad,
+  project = plate, agent = hovering bot, model endpoint = orbiting orb,
+  cron = clock with a rotating hand, peer = pyramid with ping rings. Health is
+  a colored beacon; drift is a floating chip and an underglow.
+- Edges are routed on the tile grid (A\* with footprint obstacles + congestion
+  cost): parallel connections fan into side-by-side lanes, terrace steps are
+  crossed squarely, and each relation has its own color, dash rhythm and a
+  travelling packet dot.
+- Micro-animations everywhere (entrance drop-in, LEDs, slosh, scanline, bob,
+  orbit, flow), all phase-shifted per node and disabled under
+  `prefers-reduced-motion`. Guardrail pulses keep their semantics: blocked
+  calls shake the node with red ripples and scatter red packets along its
+  edges; reads and allowed touches flash cyan/green.
+
+To see it live without the desktop app:
+
+```bash
+node tools/iso_preview.mjs            # then open the printed URL
+# ?fleet=stub | demo (22 nodes) | single | flat — the control bar can fire
+# guardrail pulses so you can watch the shake/ripple animations.
+```
 
 MIT.

@@ -14,40 +14,52 @@ export const cn = (...parts) => parts.filter(Boolean).join(' ')
 export const FIXTURE = {
   graph: {
     nodes: [
-      { id: 'srv-realm', kind: 'server', label: 'realm-pve', stratum: 1, drift_status: 'matched', health_status: 'up', host_ip: '10.0.0.150', ports: [8006], managed_by: 'proxmox', registry_path: 'servers/realm-pve.md' },
-      { id: 'lxc-201-litellm', kind: 'lxc', label: 'litellm-gateway', stratum: 2, drift_status: 'changed', health_status: 'up', host_ip: '10.0.0.212', ports: [4000], managed_by: 'proxmox', registry_path: 'services/litellm.md', drift_reasons: ['host_ip: registry says 10.0.0.143, live is 10.0.0.212'] },
-      { id: 'svc-wazuh', kind: 'service', label: 'wazuh', stratum: 3, drift_status: 'unregistered', health_status: 'up', host_ip: '10.0.0.218', ports: [443], managed_by: 'docker', drift_reasons: ['alive, no registry entry'] },
-      { id: 'svc-llama-dashboard', kind: 'service', label: 'llama-dashboard', stratum: 3, drift_status: 'stale', health_status: 'down', host_ip: '10.0.0.143', ports: [8081], managed_by: 'systemd-user', registry_path: 'services/llama-dashboard.md', pitfalls_summary: 'Start it through Control on :8081.', drift_reasons: ['probe failed: connect refused'] },
-      { id: 'agent-bossagent', kind: 'agent', label: 'bossagent', stratum: 4, drift_status: 'matched', health_status: 'up' }
+      { id: 'srv-pve', kind: 'server', label: 'pve-one', stratum: 1, drift_status: 'matched', health_status: 'up', host_ip: '10.20.0.11', ports: [8006], managed_by: 'proxmox', registry_path: 'servers/pve-one.md' },
+      { id: 'peer-relay', kind: 'peer', label: 'tail-relay', stratum: 1, drift_status: 'observed', health_status: 'unknown', tailnet_ip: '100.64.0.7' },
+      { id: 'vm-101-ops', kind: 'vm', label: 'ops-vm', stratum: 2, vmid: 101, parent_id: 'srv-pve', drift_status: 'matched', health_status: 'up', host_ip: '10.20.0.21', managed_by: 'proxmox', registry_path: 'servers/ops-vm.md' },
+      { id: 'lxc-202-cache', kind: 'lxc', label: 'cache-tank', stratum: 2, vmid: 202, parent_id: 'srv-pve', drift_status: 'changed', health_status: 'up', host_ip: '10.20.0.22', managed_by: 'proxmox', registry_path: 'servers/cache-tank.md', drift_reasons: ['host_ip: registry says 10.20.0.30, live is 10.20.0.22'] },
+      { id: 'ct-redis', kind: 'container', label: 'redis', stratum: 2, parent_id: 'srv-pve', drift_status: 'matched', health_status: 'degraded', host_ip: '10.20.0.23', managed_by: 'docker', uptime_24h_pct: 97.2 },
+      { id: 'svc-gateway', kind: 'service', label: 'edge-gateway', stratum: 3, parent_id: 'lxc-202-cache', drift_status: 'matched', health_status: 'up', host_ip: '10.20.0.31', ports: [443], managed_by: 'docker', registry_path: 'services/edge-gateway.md' },
+      { id: 'svc-render', kind: 'service', label: 'render-farm', stratum: 3, parent_id: 'vm-101-ops', drift_status: 'stale', health_status: 'down', host_ip: '10.20.0.32', ports: [8081], managed_by: 'systemd-user', registry_path: 'services/render-farm.md', pitfalls_summary: 'Start it through Control on :8081.', drift_reasons: ['probe failed: connect refused'] },
+      { id: 'proj-migration', kind: 'project', label: 'pve8-migration', stratum: 3, parent_id: 'vm-101-ops', drift_status: 'doc_only', health_status: 'unknown', project_path: '/srv/migration' },
+      { id: 'agent-hermes', kind: 'agent', label: 'hermes', stratum: 4, drift_status: 'matched', health_status: 'up' },
+      { id: 'cron-backups', kind: 'cron', label: 'nightly-backups', stratum: 4, parent_id: 'agent-hermes', drift_status: 'matched', health_status: 'up' },
+      { id: 'mdl-gpt-bridge', kind: 'model_endpoint', label: 'gpt-bridge', stratum: 4, drift_status: 'matched', health_status: 'up' }
     ],
     edges: [
-      { source: 'srv-realm', target: 'lxc-201-litellm', relation: 'runs' },
-      { source: 'lxc-201-litellm', target: 'svc-llama-dashboard', relation: 'serves' },
-      { source: 'agent-bossagent', target: 'svc-llama-dashboard', relation: 'manages' }
+      { source_id: 'srv-pve', target_id: 'vm-101-ops', relation: 'hosts' },
+      { source_id: 'srv-pve', target_id: 'lxc-202-cache', relation: 'hosts' },
+      { source_id: 'srv-pve', target_id: 'ct-redis', relation: 'hosts' },
+      { source_id: 'vm-101-ops', target_id: 'svc-render', relation: 'hosts' },
+      { source_id: 'lxc-202-cache', target_id: 'svc-gateway', relation: 'hosts' },
+      { source_id: 'vm-101-ops', target_id: 'proj-migration', relation: 'hosts' },
+      { source_id: 'agent-hermes', target_id: 'cron-backups', relation: 'hosts' },
+      { source_id: 'agent-hermes', target_id: 'mdl-gpt-bridge', relation: 'uses_model' },
+      { source_id: 'cron-backups', target_id: 'svc-gateway', relation: 'monitors' },
+      { source_id: 'svc-gateway', target_id: 'ct-redis', relation: 'depends_on' }
     ],
-    incidents: [{ id: 7, node_id: 'svc-llama-dashboard', status: 'open', trigger_error: 'connect refused 127.0.0.1:8081', opened_at: 1794000000, attempts: 1 }],
-    counts: { matched: 2, changed: 1, unregistered: 1, stale: 1, doc_only: 0, total: 5 },
-    fleet: { monitored_nodes: 5, down_nodes: 1, avg_uptime_24h_pct: 98.6 },
+    incidents: [{ id: 7, node_id: 'svc-render', node_label: 'render-farm', status: 'open', trigger_error: 'connect refused 10.20.0.32:8081', opened_at: 1794000000, attempts: 1 }],
+    counts: { matched: 7, changed: 1, unregistered: 0, stale: 1, observed: 1, doc_only: 1, total: 11 },
+    fleet: { monitored_nodes: 11, down_nodes: 1, avg_uptime_24h_pct: 98.6 },
     last_sweep: { sweep_id: 'sw-1', finished_at: 1794000100, duration_ms: 900 },
-    activity: [{ ts: 1794000000, session_id: 's1', tool_name: 'terminal', node_id: 'svc-llama-dashboard', action_kind: 'touch_blocked', blocked: 1, summary: 'ssh root@10.0.0.143' }],
+    activity: [{ ts: 1794000000, session_id: 's1', tool_name: 'terminal', node_id: 'svc-render', action_kind: 'touch_blocked', blocked: 1, summary: 'ssh root@10.20.0.32' }],
     config: { guardrail_mode: 'block', auto_heal_mode: 'auto' }
   },
   node: {
     node: {
-      id: 'lxc-201-litellm', kind: 'lxc', label: 'litellm-gateway', stratum: 2,
-      drift_status: 'changed', health_status: 'up', host_ip: '10.0.0.212', ports: [4000],
-      managed_by: 'proxmox', registry_path: 'services/litellm.md',
-      doc_state: { host_ip: '10.0.0.143', ports: [4000] },
-      live_state: { host_ip: '10.0.0.212', ports: [4000] },
-      drift_reasons: ['host_ip: registry says 10.0.0.143, live is 10.0.0.212'],
-      uptime_24h_pct: 99.4, latency_ms: 12, pitfalls_summary: 'Dial 10.0.0.212:4000 directly.'
+      id: 'lxc-202-cache', kind: 'lxc', label: 'cache-tank', stratum: 2,
+      drift_status: 'changed', health_status: 'up', host_ip: '10.20.0.22', ports: [6379],
+      managed_by: 'proxmox', registry_path: 'servers/cache-tank.md',
+      doc_state: { host_ip: '10.20.0.30', ports: [6379] },
+      live_state: { host_ip: '10.20.0.22', ports: [6379] },
+      drift_reasons: ['host_ip: registry says 10.20.0.30, live is 10.20.0.22'],
+      uptime_24h_pct: 99.4, latency_ms: 12, pitfalls_summary: 'Dial 10.20.0.22:6379 directly.'
     },
-    diff: [{ field: 'host_ip', doc: '10.0.0.143', live: '10.0.0.212', state: 'changed' }],
-    blast_radius: { upstream: [{ id: 'srv-realm', label: 'realm-pve', kind: 'server' }], downstream: [{ id: 'svc-llama-dashboard', label: 'llama-dashboard', kind: 'service' }] },
-    probes: [{ ts: 1794000000, ok: 1, latency_ms: 12 }, { ts: 1793999700, ok: 1, latency_ms: 15 }],
+    diff: [{ field: 'host_ip', doc: '10.20.0.30', live: '10.20.0.22', state: 'changed' }],
+    blast_radius: { upstream: [{ id: 'srv-pve', label: 'pve-one', kind: 'server' }], downstream: [{ id: 'svc-gateway', label: 'edge-gateway', kind: 'service' }] },
+    probe_history: [{ ts: 1794000000, status: 'up', latency_ms: 12 }, { ts: 1793999700, status: 'up', latency_ms: 15 }],
     incidents: [{ id: 3, status: 'resolved', trigger_error: 'timeout', opened_at: 1793900000, closed_at: 1793900300 }],
-    uptime: { uptime_24h_pct: 99.4, samples: 240 },
-    registry_markdown: '# LiteLLM\n\nDial 10.0.0.212:4000 directly.',
+    registry_markdown: '# cache-tank\n\nDial 10.20.0.22:6379 directly.',
     guardrail: { unlocked: false }
   }
 }

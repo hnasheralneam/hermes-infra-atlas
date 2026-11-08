@@ -33,7 +33,7 @@ for (const surface of surfaces) {
   try {
     let element
     if (surface.area === 'transcript-directive') {
-      const attrs = surface.data?.name === 'infra' ? { id: 'lxc-201-litellm' } : {}
+      const attrs = surface.data?.name === 'infra' ? { id: 'lxc-202-cache' } : {}
       element = surface.data.render({ attrs })
     } else {
       element = surface.render({})
@@ -44,7 +44,7 @@ for (const surface of surfaces) {
     }
     let html = renderToString(element)
     if (!html) html = renderToStaticMarkup(element)
-    results.push({ label, ok: true, bytes: html.length, sample: html.slice(0, 80) })
+    results.push({ label, ok: true, bytes: html.length, sample: html.slice(0, 80), html })
   } catch (error) {
     results.push({ label, ok: false, error: `${error.name}: ${error.message}`, stack: String(error.stack).split('\n').slice(0, 3).join('\n') })
   }
@@ -58,5 +58,17 @@ for (const result of results) {
       : `FAIL ${result.label}\n     ${result.error}\n     ${result.stack}`
   )
 }
+
+// The page must render the isometric scene, not merely not crash: platforms,
+// per-kind shapes, routed edges and the travelling packets are all part of it.
+const page = results.find(result => result.label.startsWith('page ['))
+const sceneMarkers = ['ia-iso', 'ia-plat-top', 'ia-node ', 'ia-edge-line', 'animateMotion']
+const missing = page?.html ? sceneMarkers.filter(marker => !page.html.includes(marker)) : sceneMarkers
+if (missing.length) {
+  console.log(`FAIL page isometric scene is missing: ${missing.join(', ')}`)
+  process.exit(1)
+}
+console.log('ok   page renders the isometric scene (platforms, shapes, routed edges, packets)')
+
 console.log(`\n${results.length - failed.length}/${results.length} surfaces rendered`)
 process.exit(failed.length ? 1 : 0)
