@@ -1,0 +1,6 @@
+{
+  "name": "infra-atlas",
+  "title": "Infra Atlas",
+  "description": "Infrastructure topology, drift reconciliation, uptime and incident backend",
+  "api": "plugin_api.py"
+}

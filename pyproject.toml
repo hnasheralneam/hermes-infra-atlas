@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infra-atlas"
+version = "0.1.0"
+description = "Active infrastructure knowledge base: registry parsing, live topology, drift, uptime and a read-before-touch guardrail for Hermes Agent"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "DawgSec", email = "hnasher1@umbc.edu" }]
+dependencies = []
+
+[tool.setuptools]
+py-modules = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git", "node_modules", "fixtures", "skills", "desktop", "dashboard", "tools", "collectors"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

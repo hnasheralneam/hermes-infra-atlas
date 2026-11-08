@@ -1,0 +1,98 @@
+name: infra-atlas
+version: "0.1.0"
+description: "Active infrastructure knowledge base: registry parsing, live topology discovery, drift reconciliation, uptime monitoring with autonomous downtime response, and a mandatory read-before-you-touch guardrail."
+author: "DawgSec (Hamza Nasher-Alneam)"
+license: MIT
+requires_hermes: ">=0.21.5"
+
+provides_tools:
+  - infra_query
+  - infra_sweep
+  - infra_diff
+  - infra_upsert
+  - infra_bootstrap
+  - infra_incidents
+
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - on_session_start
+
+config_schema:
+  registry_path:
+    type: str
+    default: "~/.hermes/infra-registry"
+    label: "Registry directory"
+    description: "Markdown infrastructure knowledge base (servers/, services/, projects/, INDEX.md, change-log.md)."
+  guardrail_mode:
+    type: str
+    choices: [block, warn, off]
+    default: block
+    label: "Read-before-touch guardrail"
+    description: "block vetoes a tool call that touches registered infrastructure whose registry entry was not read in this session. warn logs only. off disables the gate."
+  auto_heal_mode:
+    type: str
+    choices: [auto, playbook_only, notify_only, off]
+    default: auto
+    label: "Downtime response mode"
+    description: "auto runs the safe local restart playbook and escalates to the agent if the node stays down. playbook_only never wakes the agent. notify_only only records and alerts. off disables automated response."
+  failure_threshold:
+    type: int
+    default: 2
+    label: "Outage failure threshold"
+    description: "Consecutive failed probes before an incident opens."
+  heal_cooldown_sec:
+    type: int
+    default: 300
+    label: "Auto-heal cooldown (seconds)"
+    description: "Minimum gap between automated remediation attempts on the same node."
+  demo_mode:
+    type: bool
+    default: false
+    label: "Demo fixture fleet"
+    description: "Overlay the bundled sanitized fleet so the graph, drift and incident views are populated without any external API credentials."
+  enable_local_collector:
+    type: bool
+    default: true
+    label: "Collect local host, systemd, Docker and Tailscale"
+    description: "Zero-config discovery of this machine: listening ports, systemd services, containers and Tailscale peers."
+  enable_hermes_collector:
+    type: bool
+    default: true
+    label: "Collect the Hermes runtime"
+    description: "Map configured model endpoints, MCP servers, cron jobs and their freshness onto the graph."
+  enable_probes:
+    type: bool
+    default: true
+    label: "Run TCP/HTTP uptime probes"
+    description: "Probe registered endpoints during a sweep to record uptime and latency."
+  probe_timeout_sec:
+    type: float
+    default: 1.5
+    label: "Probe timeout (seconds)"
+  proxmox_url:
+    type: str
+    default: ""
+    label: "Proxmox VE API URL"
+    description: "Optional, e.g. https://10.0.0.150:8006"
+  proxmox_token_id:
+    type: str
+    default: ""
+    label: "Proxmox API token id"
+    description: "user@realm!tokenname"
+  proxmox_verify_tls:
+    type: bool
+    default: false
+    label: "Verify the Proxmox TLS certificate"
+  proxmox_token_secret:
+    type: secret
+    env: INFRA_ATLAS_PROXMOX_TOKEN_SECRET
+    label: "Proxmox API token secret"
+  headscale_url:
+    type: str
+    default: ""
+    label: "Headscale API URL"
+  headscale_api_key:
+    type: secret
+    env: INFRA_ATLAS_HEADSCALE_API_KEY
+    label: "Headscale API key"
