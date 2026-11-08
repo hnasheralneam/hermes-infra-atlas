@@ -301,6 +301,16 @@ def _load_package():
 
 
 def main() -> int:
+    # A watchdog that cannot read its own state must stay quiet: waking the agent
+    # about a locked database every tick is noise, not an outage report.
+    try:
+        return _run()
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps({"wakeAgent": False, "skipped": f"watchdog could not run: {exc}"}))
+        return 0
+
+
+def _run() -> int:
     _load_package()
     config = importlib.import_module(PACKAGE + ".config")
     fusion = importlib.import_module(PACKAGE + ".fusion")
