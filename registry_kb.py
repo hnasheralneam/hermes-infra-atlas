@@ -375,6 +375,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
 
 def parse_registry(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return ``(nodes, edges)`` parsed from every entry under ``root``."""
+    root = Path(root)
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     if not root.exists():
@@ -398,6 +399,7 @@ def parse_registry(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
 
 
 def read_entry_text(root: Path, registry_path: str) -> str:
+    root = Path(root)
     path = (root / registry_path).resolve()
     try:
         path.relative_to(root.resolve())
@@ -407,6 +409,7 @@ def read_entry_text(root: Path, registry_path: str) -> str:
 
 
 def read_index_text(root: Path) -> str:
+    root = Path(root)
     path = root / "INDEX.md"
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
@@ -428,6 +431,7 @@ def _atomic_write(path: Path, text: str) -> None:
 
 def prepend_change_log(root: Path, heading: str, bullets: list[str]) -> None:
     """Insert one entry at the top of ``change-log.md`` (below the H1 when present)."""
+    root = Path(root)
     path = root / "change-log.md"
     entry = f"\n## {heading}\n" + "\n".join(f"- {line}" for line in bullets) + "\n"
     if not path.exists():
@@ -447,6 +451,7 @@ def prepend_change_log(root: Path, heading: str, bullets: list[str]) -> None:
 
 def update_index(root: Path, node: dict[str, Any]) -> None:
     """Best-effort INDEX.md row; never rewrites an existing mention."""
+    root = Path(root)
     path = root / "INDEX.md"
     if not path.exists():
         return
@@ -491,6 +496,7 @@ def upsert_entry(
     create_body: str = "",
 ) -> dict[str, Any]:
     """Create/merge one registry entry, refresh INDEX.md and prepend a change-log entry."""
+    root = Path(root)
     kind = str(node.get("kind") or "service")
     node_id = str(node.get("id") or "").strip()
     if not node_id:
@@ -524,7 +530,7 @@ def upsert_entry(
         ("recovery_cmd", "recovery_cmd"),
         ("auto_heal_policy", "auto_heal_policy"),
         ("depends_on", "depends_on"),
-        ("pitfalls", "pitfalls_summary"),
+        ("pitfalls", "pitfalls"),
     ):
         value = node.get(source_key)
         if value not in (None, "", [], "inherit"):
@@ -550,7 +556,7 @@ def upsert_entry(
         "registry_path": str(path.relative_to(root)),
     }
     update_index(root, parsed)
-    action = "Adopted live state" if not existed else "Updated entry"
+    action = "Created entry" if not existed else "Updated entry"
     bullets = [
         f"**Node:** `{node_id}` (`{parsed.get('registry_path')}`)",
         f"**Change:** {action} — {reason.strip() or 'no reason recorded'}",
@@ -576,6 +582,7 @@ def mark_removed(root: Path, node: dict[str, Any], reason: str, session_id: str 
 
 def bootstrap_annotate(root: Path, dry_run: bool = False) -> dict[str, Any]:
     """Add frontmatter to legacy entries without touching their prose."""
+    root = Path(root)
     annotated: list[str] = []
     skipped: list[str] = []
     errors: list[str] = []
