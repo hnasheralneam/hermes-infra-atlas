@@ -25,17 +25,20 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <title>Infra Atlas — isometric preview</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #12151d; color: #e5e9f0;
+  html, body { margin: 0; height: 100%; background: #0a0e17; color: #d9e4f5;
     font-family: ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
   #root { position: absolute; inset: 0 0 52px 0; }
   #panel { position: fixed; left: 0; right: 0; bottom: 0; height: 52px; display: flex;
-    align-items: center; gap: 8px; padding: 0 14px; background: #171b26;
-    border-top: 1px solid rgba(128,128,140,.25); font-size: 12px; z-index: 10; }
-  #panel button, #panel a { background: rgba(128,128,140,.14); color: inherit; border: 1px solid rgba(128,128,140,.3);
-    border-radius: 7px; padding: 4px 10px; font-size: 11px; cursor: pointer; text-decoration: none; }
-  #panel .lbl { color: #8b93a5; }
+    align-items: center; gap: 8px; padding: 0 14px; background: #0c1019;
+    border-top: 1px solid rgba(96,126,190,.4); font-size: 12px; z-index: 10; }
+  #panel button, #panel a { background: #141a28; color: #9fb0cc; border: none;
+    box-shadow: inset 0 0 0 1px rgba(96,126,190,.3); clip-path: polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px);
+    padding: 5px 11px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    cursor: pointer; text-decoration: none; }
+  #panel button:hover, #panel a:hover { box-shadow: inset 0 0 0 1px rgba(125,211,252,.7); color: #e5eefb; }
+  #panel .lbl { color: #5f6f8f; text-transform: uppercase; letter-spacing: .12em; font-size: 9px; }
   #panel .spacer { flex: 1; }
-  #panel .danger { border-color: #ef4444; color: #ef4444; }
+  #panel .danger { box-shadow: inset 0 0 0 1px rgba(239,68,68,.5); color: #fca5a5; }
 </style>
 <script type="importmap">
 {

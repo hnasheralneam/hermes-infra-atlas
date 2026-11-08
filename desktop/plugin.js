@@ -251,6 +251,13 @@ function planScene(nodes) {
     for (const band of bands) if (y >= band.y0 && y < band.y1) return band.z
     return platforms[platforms.length - 1].z
   }
+  // the y where the terrace level changes between two grid rows (the cliff lip)
+  const zBoundary = (ya, yb) => {
+    const lo = Math.min(ya, yb)
+    const hi = Math.max(ya, yb)
+    for (const band of bands) if (band.y1 > lo && band.y1 <= hi) return band.y1
+    return hi
+  }
   const platformAt = (gx, gy) =>
     platforms.find(p => gx >= p.L && gx < p.L + p.W && gy >= p.P && gy < p.P + p.D)
   const stepAt = (gx, gy) => {
@@ -284,7 +291,7 @@ function planScene(nodes) {
   let minY = Infinity
   let maxY = -Infinity
   platforms.forEach(p => {
-    const cliff = p.z * ISO.stepZ + ISO.slab // terrace fronts reach down to the base plane
+    const cliff = 16 + ISO.stepZ // every slab is the same thickness
     const corners = [
       { x: projX(p.L, p.P), y: projY(p.L, p.P, p.z) },
       { x: projX(p.L + p.W, p.P), y: projY(p.L + p.W, p.P, p.z) },
@@ -307,6 +314,7 @@ function planScene(nodes) {
     placed,
     occupied,
     zAt,
+    zBoundary,
     latticeOk,
     hugCost,
     stepAt,
@@ -523,7 +531,23 @@ function routeEdges(edges, plan) {
       const cross = (p.x - prev.x) * (next.y - p.y) - (p.y - prev.y) * (next.x - p.x)
       if (Math.abs(cross) > 0.02) simple.push(p)
     })
-    const screenPoints = simple.map(p => ({ x: projX(p.x, p.y), y: projY(p.x, p.y, plan.zAt(p.y)) }))
+    // project to screen; where a run crosses a terrace step the trace runs to
+    // the cliff lip and drops straight down the cliff face — every segment
+    // stays on an isometric grid line or plumbs vertically, no free diagonals
+    const screenPoints = []
+    simple.forEach((p, i) => {
+      if (i) {
+        const prev = simple[i - 1]
+        const z1 = plan.zAt(prev.y)
+        const z2 = plan.zAt(p.y)
+        if (z1 !== z2 && prev.x === p.x) {
+          const yB = plan.zBoundary(prev.y, p.y)
+          screenPoints.push({ x: projX(p.x, yB), y: projY(p.x, yB, z1) })
+          screenPoints.push({ x: projX(p.x, yB), y: projY(p.x, yB, z2) })
+        }
+      }
+      screenPoints.push({ x: projX(p.x, p.y), y: projY(p.x, p.y, plan.zAt(p.y)) })
+    })
     const smooth = smoothPath(screenPoints)
 
     const style = relationStyle(edge.relation)
@@ -833,9 +857,10 @@ function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddre
     },
     style: { '--mat': scene.mat, '--acc': scene.accent, '--d': `${delay}ms` },
     children: [
-      jsx('ellipse', { cx: 0, cy: 2.5, rx: scene.shadow, ry: scene.shadow / 2.1, className: 'ia-shadow' }),
+      // crisp isometric diamonds — flat shadow plates, no soft blur
+      jsx('path', { d: `M 0 ${r2(2.5 - scene.shadow / 2)} L ${r2(scene.shadow)} 2.5 L 0 ${r2(2.5 + scene.shadow / 2)} L ${r2(-scene.shadow)} 2.5 Z`, className: 'ia-shadow' }),
       drift !== 'matched'
-        ? jsx('ellipse', { cx: 0, cy: 1.5, rx: scene.shadow * 0.95, ry: scene.shadow * 0.5, className: 'ia-dglow', style: { fill: driftColor } })
+        ? jsx('path', { d: `M 0 ${r2(1.5 - scene.shadow * 0.46)} L ${r2(scene.shadow * 0.92)} 1.5 L 0 ${r2(1.5 + scene.shadow * 0.46)} L ${r2(-scene.shadow * 0.92)} 1.5 Z`, className: 'ia-dglow', style: { fill: driftColor } })
         : null,
       active
         ? jsx('path', {
@@ -1139,19 +1164,18 @@ function PlatformView({ platform, next }) {
   const B = { x: projX(p.L + p.W, p.P), y: projY(p.L + p.W, p.P, z) }
   const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, z) }
   const D = { x: projX(p.L, p.P + p.D), y: projY(p.L, p.P + p.D, z) }
-  // terrace fronts drop to the base plane: one hillside, not islands (front-most
-  // terrace keeps a plinth so its cliff still carries the stratum label)
-  const dz = Math.max(26, z * ISO.stepZ + ISO.slab)
+  // every slab is the same thickness: one joint row plus one level drop, so
+  // each cliff meets the next terrace's top edge exactly
+  const dz = 16 + ISO.stepZ
   const face = (p1, p2, depth) =>
     `M ${r2(p1.x)} ${r2(p1.y)} L ${r2(p2.x)} ${r2(p2.y)} L ${r2(p2.x)} ${r2(p2.y + depth)} L ${r2(p1.x)} ${r2(p1.y + depth)} Z`
-  // the joint row becomes a visible slope riser, fusing the terraces together
+  // backstop seam filler under the cliff, fusing the terraces together
   const riser = next
     ? `M ${r2(D.x)} ${r2(D.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(projX(next.L + next.W, next.P))} ${r2(projY(next.L + next.W, next.P, next.z))} L ${r2(projX(next.L, next.P))} ${r2(projY(next.L, next.P, next.z))} Z`
     : null
   let grid = ''
   for (let gx = p.L + 1; gx < p.L + p.W; gx++) grid += `M ${r2(projX(gx, p.P))} ${r2(projY(gx, p.P, z))} L ${r2(projX(gx, p.P + p.D))} ${r2(projY(gx, p.P + p.D, z))} `
   for (let gy = p.P + 1; gy < p.P + p.D; gy++) grid += `M ${r2(projX(p.L, gy))} ${r2(projY(p.L, gy, z))} L ${r2(projX(p.L + p.W, gy))} ${r2(projY(p.L + p.W, gy, z))} `
-  const labelPos = { x: D.x + 13, y: D.y + Math.min(dz * 0.66, dz - 4) }
   return jsxs('g', {
     className: cn('ia-plat', `ia-plat-${p.t % 4}`),
     style: { '--t': p.t, animationDelay: `${p.t * 110}ms` },
@@ -1163,15 +1187,23 @@ function PlatformView({ platform, next }) {
       jsx('path', { d: face(B, C, dz), className: 'ia-plat-right' }),
       jsx('path', { d: `M ${r2(A.x)} ${r2(A.y)} L ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)} Z`, className: 'ia-plat-top' }),
       jsx('path', { d: grid, className: 'ia-plat-grid' }),
-      jsx('path', { d: `M ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)}`, className: 'ia-plat-edge' }),
-      jsx('text', {
-        x: 0,
-        y: 0,
-        className: 'ia-plat-label',
-        transform: `translate(${r2(labelPos.x)} ${r2(labelPos.y)}) matrix(0.894 0.447 0 1 0 0)`,
-        children: STRATUM_NAME[p.stratum] || `TIER ${p.stratum}`
-      })
+      jsx('path', { d: `M ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)}`, className: 'ia-plat-edge' })
     ]
+  })
+}
+
+// stratum labels ride the right end of each terrace's front face; they render
+// after every platform so a lower terrace can never paint over them
+function PlatformLabel({ platform }) {
+  const p = platform
+  const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, p.z) }
+  return jsx('text', {
+    x: 0,
+    y: 0,
+    textAnchor: 'end',
+    className: 'ia-plat-label',
+    transform: `translate(${r2(C.x - 12)} ${r2(C.y + 19)}) matrix(0.894 0.447 0 1 0 0)`,
+    children: STRATUM_NAME[p.stratum] || `TIER ${p.stratum}`
   })
 }
 
@@ -1284,21 +1316,12 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
         onPointerUp,
         onPointerLeave: onPointerUp,
         children: [
-          jsx('defs', {
-            children: jsx('filter', {
-              id: 'ia-soft',
-              x: '-60%',
-              y: '-60%',
-              width: '220%',
-              height: '220%',
-              children: jsx('feGaussianBlur', { stdDeviation: 2.4 })
-            })
-          }),
           jsxs('g', {
             className: 'ia-iso',
             transform: `translate(${r2(plan.origin.x)} ${r2(plan.origin.y)})`,
             children: [
               plan.platforms.map((p, i) => jsx(PlatformView, { platform: p, next: plan.platforms[i + 1] }, `plat-${p.t}`)),
+              plan.platforms.map(p => jsx(PlatformLabel, { platform: p }, `plat-label-${p.t}`)),
               routed.map(route => jsx(EdgeView, { route, selectedId, pulseFor, labelHint: labelHintOf(route) }, route.key)),
               ordered.map(({ info, fresh }) =>
                 jsx(IsoNode, {
@@ -1971,7 +1994,7 @@ const CSS = `
 .ia-plat-2 { --plat:#3b3550; }
 .ia-plat-3 { --plat:#2f4744; }
 .ia-plat-riser { fill:color-mix(in srgb, var(--plat, #333a4a) 34%, #000000); }
-.ia-plat-grid { fill:none; stroke:rgba(190,205,235,.09); stroke-width:1; }
+.ia-plat-grid { fill:none; stroke:rgba(190,205,235,.13); stroke-width:1; }
 .ia-plat-edge { fill:none; stroke:rgba(220,235,255,.16); stroke-width:1.1; }
 .ia-plat-label { font-size:10px; font-weight:600; letter-spacing:.24em; fill:rgba(238,243,252,.6); }
 
@@ -1983,7 +2006,7 @@ const CSS = `
 .ia-edge-head { fill:var(--edge-c, #96a0b5); fill-opacity:.85; }
 .ia-edge-hit { fill:none; stroke:transparent; stroke-width:11; pointer-events:stroke; cursor:pointer; }
 .ia-packet-core { fill:var(--edge-c, #96a0b5); }
-.ia-packet-halo { fill:var(--edge-c, #96a0b5); opacity:.22; }
+.ia-packet-halo { fill:none; stroke:var(--edge-c, #96a0b5); stroke-width:1; opacity:.45; }
 .ia-burst circle { fill:var(--ui-danger, #ef4444); opacity:0; animation:ia-burst-fade 1.7s ease-out 3; }
 
 .ia-node { cursor:pointer; }
@@ -1996,8 +2019,8 @@ const CSS = `
 .ia-f-back { fill:color-mix(in srgb, var(--mat, #424a5e) 34%, #000000); stroke:none; }
 .ia-detail { stroke:rgba(255,255,255,.14); stroke-width:1; fill:none; }
 .ia-groove { stroke:rgba(0,0,0,.34); stroke-width:1; fill:none; }
-.ia-shadow { fill:rgba(3,6,14,.35); filter:url(#ia-soft); }
-.ia-dglow { opacity:.28; filter:url(#ia-soft); animation:ia-glowp 3s ease-in-out infinite; }
+.ia-shadow { fill:rgba(3,6,14,.42); }
+.ia-dglow { opacity:.26; animation:ia-glowp 3s ease-in-out infinite; }
 .ia-sel-ring { fill:color-mix(in srgb, var(--ui-accent, #6366f1) 10%, transparent); stroke:var(--ui-accent, #6366f1); stroke-width:1.5; stroke-dasharray:7 5; animation:ia-ants 1.1s linear infinite; }
 .ia-node-title { font-size:10px; font-weight:600; fill:var(--ui-text-primary, currentColor); paint-order:stroke; stroke:rgba(8,10,16,.72); stroke-width:2.6px; stroke-linejoin:round; }
 .ia-node-sub2 { font-size:8px; fill:var(--ui-text-quaternary, #9ca3af); paint-order:stroke; stroke:rgba(8,10,16,.72); stroke-width:2.2px; stroke-linejoin:round; }
@@ -2023,7 +2046,7 @@ const CSS = `
 .ia-visor { stroke-width:2.8; stroke-linecap:round; opacity:.98; }
 .ia-bob { animation:ia-bob 3.4s ease-in-out infinite; }
 .ia-bob-slow { animation-duration:4.6s; }
-.ia-orb { opacity:.92; filter:url(#ia-soft); }
+.ia-orb { opacity:.95; }
 .ia-orb-shine { fill:rgba(255,255,255,.55); }
 .ia-orbit-ring { fill:none; stroke:var(--acc, #e879f9); stroke-width:.8; stroke-opacity:.4; }
 .ia-clock-face { fill:#141d2c; stroke:rgba(255,255,255,.38); stroke-width:1.3; }
@@ -2032,7 +2055,7 @@ const CSS = `
 .ia-ping { fill:none; stroke-width:1.2; transform-box:fill-box; transform-origin:center; animation:ia-ping 3s ease-out infinite; opacity:0; }
 
 /* health beacons */
-.ia-beacon { filter:url(#ia-soft); }
+.ia-beacon { stroke:rgba(8,10,16,.8); stroke-width:.8; }
 .ia-beacon-up { animation:ia-beacon-soft 2.6s ease-in-out infinite; }
 .ia-beacon-degraded { animation:ia-beacon-hard 1.2s ease-in-out infinite; }
 .ia-beacon-down { animation:ia-beacon-hard .55s ease-in-out infinite; }
@@ -2069,8 +2092,8 @@ const CSS = `
 @keyframes ia-chipf { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-1.6px); } }
 @keyframes ia-burst-fade { 0% { opacity:0; } 12% { opacity:1; } 80% { opacity:.9; } 100% { opacity:0; } }
 @keyframes ia-shake { 0%,100% { transform:translateX(0); } 25% { transform:translateX(-3.5px); } 75% { transform:translateX(3.5px); } }
-@keyframes ia-flash-allowed { 0% { filter:drop-shadow(0 0 6px var(--ui-success, #10b981)); } 100% { filter:none; } }
-@keyframes ia-flash-read { 0% { filter:drop-shadow(0 0 7px var(--ui-info, #06b6d4)); } 100% { filter:none; } }
+@keyframes ia-flash-allowed { 0% { opacity:.45; } 100% { opacity:1; } }
+@keyframes ia-flash-read { 0% { opacity:.45; } 100% { opacity:1; } }
 
 @media (prefers-reduced-motion: reduce) {
   .ia-plat, .ia-edge-line, .ia-packet, .ia-burst, .ia-led, .ia-led-b, .ia-led-f, .ia-scan, .ia-meniscus,
@@ -2119,7 +2142,9 @@ const CSS = `
 .ia-spark-bar { flex:1 1 0; background:#38bdf8; opacity:.8; min-height:4px; }
 .ia-spark-down { background:#ef4444; opacity:.9; }
 .ia-runbook { margin:0; font-size:11px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; background:rgba(10,14,24,.7); box-shadow:inset 0 0 0 1px rgba(96,126,190,.2); padding:9px; max-height:none; color:#bcd2ee; }
-.ia-stream { flex:0 0 auto; max-height:150px; overflow:auto; padding:8px 14px 10px; border-top:1px solid rgba(96,126,190,.18); }
+.ia-stream { flex:0 0 auto; max-height:150px; overflow:auto; padding:9px 16px 10px 24px; background:rgba(15,23,40,.55); border-top:1px solid rgba(96,126,190,.4); position:relative; }
+.ia-stream::before { content:''; position:absolute; top:6px; left:9px; width:8px; height:8px; border-top:2px solid rgba(125,211,252,.5); border-left:2px solid rgba(125,211,252,.5); pointer-events:none; }
+.ia-stream::after { content:''; position:absolute; bottom:6px; right:9px; width:8px; height:8px; border-bottom:2px solid rgba(125,211,252,.5); border-right:2px solid rgba(125,211,252,.5); pointer-events:none; }
 .ia-stream-title { font-size:9px; text-transform:uppercase; letter-spacing:.18em; color:#7fa7d9; margin-bottom:5px; display:flex; align-items:center; gap:7px; }
 .ia-live-dot { width:6px; height:6px; flex:0 0 6px; background:#38bdf8; clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%); animation:ia-beacon-soft 1.8s ease-in-out infinite; }
 .ia-stream-rows { display:flex; flex-direction:column; gap:2px; }
