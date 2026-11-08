@@ -135,4 +135,19 @@ hermes plugins doctor .
 hermes plugins validate .
 ```
 
+The desktop half has its own check — it is loaded uncompiled by the app, so a bad
+component only fails at render time:
+
+```bash
+node tools/render_smoke.mjs --modules /path/to/a/node_modules   # needs react + react-dom
+```
+
+It renders every registered surface (page, chip, both transcript cards) with
+`react-dom/server` against a stubbed `@hermes/plugin-sdk` and fails on any crash.
+Eight of eight surfaces render on this tree.
+
+The topology is drawn as SVG rather than a canvas: it scales with `viewBox`
+instead of a `ResizeObserver` + `devicePixelRatio` dance, keeps the nodes
+selectable and keyboard-reachable, and stays crisp at any zoom.
+
 MIT.
