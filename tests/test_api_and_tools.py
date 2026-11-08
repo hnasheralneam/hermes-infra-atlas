@@ -211,3 +211,19 @@ def test_api_sweep_demo_mode_loads_the_fixture(plugin_home, registry):
     nodes = store.list_nodes()
     assert len(nodes) == 22
     assert {node["drift_status"] for node in nodes} >= {"matched", "changed", "unregistered", "stale"}
+
+
+def test_automation_blueprint_validates_against_the_cron_validator(plugin_home):
+    """Hermes rejects a blueprint whose schedule placeholders don't resolve — catch it in CI."""
+    import pytest
+
+    pytest.importorskip("ruamel.yaml", reason="the cron blueprint validator parses YAML through ruamel")
+    import _harness as H
+    from cron.blueprint_catalog import fill_blueprint
+    from cron.blueprint_plugins import build_plugin_blueprint
+
+    pkg = H.load_plugin()
+    kwargs = pkg.blueprint_kwargs()
+    blueprint = build_plugin_blueprint("infra-atlas", "uptime-watchdog", **kwargs)
+    spec = fill_blueprint(blueprint, {})          # fills defaults and validates the schedule
+    assert spec["schedule"] == "7 */1 * * *"

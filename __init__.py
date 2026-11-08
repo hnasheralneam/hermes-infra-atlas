@@ -79,29 +79,33 @@ def _register_skill(ctx) -> None:
     )
 
 
+def blueprint_kwargs() -> dict[str, Any]:
+    """The uptime-watchdog automation blueprint (kept as data so tests can validate it)."""
+    return {
+        "title": "Infra Atlas uptime watchdog",
+        "description": (
+            "Every few minutes, probe the registered fleet and resolve drift. The agent is only woken "
+            "when something is actually down, and then it gets the node's own registry runbook."
+        ),
+        "category": "ops",
+        "schedule_template": "{minute} */{every_hours} * * *",
+        "prompt_template": (
+            "Run `infra_sweep` for {scope}. For each node that is down or stale, follow its registry "
+            "entry (managed-by, pitfalls) to fix it, re-sweep to verify, then close the incident with "
+            "`infra_incidents(action=\"resolve\")`. Reply [SILENT] when the fleet is healthy."
+        ),
+        "slots": [
+            {"name": "every_hours", "type": "text", "label": "Every how many hours?", "default": "1"},
+            {"name": "time", "type": "time", "label": "Minute of the hour", "default": "00:07"},
+            {"name": "scope", "type": "text", "label": "Scope", "default": "the registered fleet"},
+        ],
+        "tags": ["ops", "uptime", "infra"],
+    }
+
+
 def _register_blueprint(ctx) -> None:
     try:
-        ctx.register_automation_blueprint(
-            "uptime-watchdog",
-            title="Infra Atlas uptime watchdog",
-            description=(
-                "Every few minutes, probe the registered fleet and resolve drift. The agent is only woken "
-                "when something is actually down, and then it gets the node's own registry runbook."
-            ),
-            category="ops",
-            schedule_template="{minute} */{every_hours} * * *",
-            prompt_template=(
-                "Run `infra_sweep` for {scope}. For each node that is down or stale, follow its registry "
-                "entry (managed-by, pitfalls) to fix it, re-sweep to verify, then close the incident with "
-                "`infra_incidents(action=\"resolve\")`. Reply [SILENT] when the fleet is healthy."
-            ),
-            slots=[
-                {"name": "every_hours", "type": "text", "label": "Every how many hours?", "default": "1"},
-                {"name": "minute", "type": "text", "label": "Minute of the hour", "default": "7"},
-                {"name": "scope", "type": "text", "label": "Scope", "default": "the registered fleet"},
-            ],
-            tags=["ops", "uptime", "infra"],
-        )
+        ctx.register_automation_blueprint("uptime-watchdog", **blueprint_kwargs())
     except Exception:  # noqa: BLE001 - a blueprint must never block the plugin
         logger.warning("infra-atlas: automation blueprint registration failed", exc_info=True)
 
