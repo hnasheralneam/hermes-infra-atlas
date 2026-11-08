@@ -192,3 +192,21 @@ def test_bulk_sweep_holds_the_write_lock_from_the_start(plugin_home):
     store.end_bulk()
     assert not store.conn.in_transaction, "end_bulk must commit"
     assert store.get_node("node-bulk")["label"] == "bulk"
+
+
+def test_failed_statement_releases_the_bulk_transaction(plugin_home):
+    """An error mid-sweep must not strand an open write transaction."""
+    import sqlite3
+
+    import pytest
+
+    H.load_plugin()
+    store = H.submodule("store").get_store()
+
+    store.begin_bulk()
+    assert store.conn.in_transaction
+    with pytest.raises(sqlite3.OperationalError):
+        store._run("INSERT INTO table_that_does_not_exist VALUES (1)")
+
+    assert not store.conn.in_transaction, "a failed statement must roll the transaction back"
+    assert store._bulk is False, "the bulk flag must not survive the failure"

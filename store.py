@@ -170,7 +170,30 @@ class AtlasStore:
 
     def _commit(self) -> None:
         if not self._bulk:
-            self.conn.commit()
+            self._commit_with_retry()
+
+    def _commit_with_retry(self) -> None:
+        """Commit, and never leave a half transaction holding the write lock.
+
+        A commit can fail with SQLITE_BUSY while another process is writing. The
+        transaction then stays open — and an open transaction in this process makes
+        every other Hermes process wait the full busy timeout on every statement.
+        Retry briefly, then roll back so the lock is released either way.
+        """
+        delay = 0.05
+        for attempt in range(6):
+            try:
+                self.conn.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 5:
+                    try:
+                        self.conn.rollback()
+                    except sqlite3.Error:
+                        pass
+                    raise
+            time.sleep(delay)
+            delay = min(delay * 2, 1.5)
 
     def _run(self, sql: str, params: Any = ()) -> sqlite3.Cursor:
         """Execute one statement, waiting out a peer's lock instead of failing.
@@ -184,14 +207,19 @@ class AtlasStore:
             with self._lock:
                 try:
                     return self.conn.execute(sql, params)
+                except sqlite3.IntegrityError:
+                    raise  # a duplicate is a caller concern: the transaction stays usable
                 except sqlite3.OperationalError as exc:
-                    if "locked" not in str(exc).lower() or attempt == 6:
-                        raise
+                    locked = "locked" in str(exc).lower()
+                    # A failed statement abandons the batch: release the lock and the
+                    # bulk flag so the process cannot sit on an open transaction.
                     self._bulk = False
                     try:
                         self.conn.rollback()
                     except sqlite3.Error:
                         pass
+                    if not locked or attempt == 6:
+                        raise
             time.sleep(delay)
             delay = min(delay * 2, 1.5)
         raise RuntimeError("unreachable")
@@ -221,7 +249,9 @@ class AtlasStore:
     def end_bulk(self) -> None:
         with self._lock:
             self._bulk = False
-            self.conn.commit()
+            # A failed commit here would strand the transaction (and the write
+            # lock) for the life of the process, so it retries and rolls back.
+            self._commit_with_retry()
 
     # -- connection -----------------------------------------------------
     @property
