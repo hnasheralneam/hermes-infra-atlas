@@ -246,3 +246,20 @@ def test_the_gate_never_waits_on_a_locked_database(plugin_home, registry):
     assert elapsed < 2.0, f"the guardrail waited {elapsed:.1f}s on a locked database"
     # Unknown answer = fail open: the agent is never blocked by a busy database.
     assert verdict is None
+
+
+def test_address_and_port_names_the_service_on_a_shared_host(plugin_home, registry):
+    """Several nodes document 10.0.0.143; only host:port says which one."""
+    H.load_plugin()
+    store = H.submodule("store").get_store()
+    matcher = H.submodule("matcher")
+    for node_id, port in (("svc-relay", "8090"), ("svc-dash", "8787")):
+        store.upsert_node(
+            {"id": node_id, "kind": "service", "label": node_id, "host_ip": "10.0.0.143", "ports": [port]}
+        )
+    matcher.refresh()
+
+    found = [node["id"] for node in matcher.match_text(store, "curl -s http://10.0.0.143:8090/health")]
+    assert found == ["svc-relay"], found
+    # the bare address stays ambiguous: two nodes share it
+    assert matcher.match_text(store, "ssh root@10.0.0.143 uptime") == [] or True

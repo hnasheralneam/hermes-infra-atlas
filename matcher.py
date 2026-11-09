@@ -57,6 +57,17 @@ def _tokens_for(node: dict[str, Any]) -> set[str]:
         tokens.add(str(node["systemd_unit"]).removesuffix(".service").lower())
     if node.get("label"):
         tokens.add(_slug(str(node["label"])))
+    # address:port is what actually names a service on a shared host: several
+    # nodes document the same IP, so the bare address is ambiguous while the
+    # pair is unique.
+    for host_key in ("host_ip", "tailnet_ip"):
+        host = str(node.get(host_key) or "").strip()
+        if not host:
+            continue
+        for port in node.get("ports") or []:
+            text = str(port).strip()
+            if text.isdigit():
+                tokens.add(f"{host}:{text}")
     return {token for token in tokens if _IDENTIFIER_RE.match(token)}
 
 
