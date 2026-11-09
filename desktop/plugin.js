@@ -175,7 +175,7 @@ function useGraph(interval = 10000) {
   
   // Add custom comparison to avoid re-renders when data hasn't meaningfully changed
   const prevDataRef = React.useRef(null)
-  const shouldSkip = React.React.useMemo(() => {
+  const shouldSkip = React.useMemo(() => {
     const current = result.data
     const prev = prevDataRef.current
     
@@ -214,7 +214,7 @@ function useNode(nodeId) {
   
   // For node data, we can be more aggressive with caching since it changes less frequently
   const prevDataRef = React.useRef(null)
-  const shouldSkip = React.React.useMemo(() => {
+  const shouldSkip = React.useMemo(() => {
     const current = result.data
     const prev = prevDataRef.current
     
@@ -1806,8 +1806,8 @@ const ZOOM_STEP = 1.2
 
 // OPTIMIZED: Memoized Topology component with useCallback for handlers
 const Topology = React.memo(function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
-  const plan = React.React.useMemo(() => planScene(nodes), [nodes])
-  const routed = React.React.useMemo(() => routeEdges(edges, plan), [edges, plan])
+  const plan = React.useMemo(() => planScene(nodes), [nodes])
+  const routed = React.useMemo(() => routeEdges(edges, plan), [edges, plan])
   const [zoom, setZoom] = React.useState(1)
   const [offset, setOffset] = React.useState({ x: 0, y: 0 })
   const [hoverNode, setHoverNode] = React.useState(null) // node id under the pointer
@@ -1902,7 +1902,7 @@ const Topology = React.memo(function Topology({ nodes, edges, selectedId, onSele
   }, [zoom, zoomIn, zoomOut, resetView])
 
   // depth order (painter's algorithm); new ids get the drop-in entrance
-  const ordered = React.React.useMemo(() => {
+  const ordered = React.useMemo(() => {
     const seen = seenRef.current || (seenRef.current = new Set())
     const list = Array.from(plan.placed.values())
       .sort((a, b) => a.u - b.u || a.gx - b.gx)
@@ -1915,7 +1915,7 @@ const Topology = React.memo(function Topology({ nodes, edges, selectedId, onSele
   }, [plan])
   
   // OPTIMIZED: Viewport culling - only render visible nodes
-  const visibleOrdered = React.React.useMemo(() => {
+  const visibleOrdered = React.useMemo(() => {
     const viewLeft = -offset.x
     const viewRight = -offset.x + plan.width / zoom
     const viewTop = -offset.y
@@ -1938,7 +1938,7 @@ const Topology = React.memo(function Topology({ nodes, edges, selectedId, onSele
   }, [ordered, offset, zoom, plan])
 
   // direct neighbours of the hovered node, for the hover highlight
-  const neighbors = React.React.useMemo(() => {
+  const neighbors = React.useMemo(() => {
     const map = new Map()
     edges.forEach(edge => {
       if (!map.has(edge.source_id)) map.set(edge.source_id, new Set())
