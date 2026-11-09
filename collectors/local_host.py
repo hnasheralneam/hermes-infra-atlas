@@ -43,6 +43,7 @@ _SESSION_NOISE_UNITS = {
     "xdg-permission-store",
     "gvfs-daemon",
     "gvfs-udisks2-volume-monitor",
+    "launchpadlib-cache-clean",
 }
 
 
@@ -114,6 +115,33 @@ def listening_ports() -> list[str]:
             if port:
                 ports.add(str(port))
     return sorted(ports, key=int)
+
+
+def _systemd_timers(scope: str) -> set[str]:
+    """Active timer unit stems (without ``.timer``) for ``--user`` or system scope."""
+    argv = ["systemctl"]
+    if scope == "user":
+        argv.append("--user")
+    argv += ["list-units", "--type=timer", "--state=active", "--output=json", "--no-pager"]
+    rc, out = _run(argv, timeout=2.5)
+    stems: set[str] = set()
+    if rc == 0 and out.strip().startswith("["):
+        try:
+            for item in json.loads(out):
+                unit = str(item.get("unit") or item.get("name") or "").strip()
+                if unit.endswith(".timer"):
+                    stems.add(unit.removesuffix(".timer"))
+            return stems
+        except (ValueError, AttributeError):
+            pass
+    argv = argv[:-2] + ["--plain", "--no-legend"]
+    rc, out = _run(argv, timeout=2.5)
+    if rc == 0:
+        for line in out.splitlines():
+            parts = line.replace("●", " ").split()
+            if parts and parts[0].endswith(".timer"):
+                stems.add(parts[0].removesuffix(".timer"))
+    return stems
 
 
 def _systemd_units(scope: str) -> list[dict[str, Any]]:
@@ -235,35 +263,38 @@ def collect() -> CollectorResult:
     )
 
     for scope in ("user", "system"):
+        active_timers = _systemd_timers(scope) if scope == "user" else set()
         for unit in _systemd_units(scope):
             name = unit["unit"]
+            stem = name.removesuffix(".service")
             active = unit["active"]
             # Per-session desktop plumbing: every login starts these, nobody
             # documents them, and they would otherwise read as "undocumented
             # services" on every sweep.
-            if name.removesuffix(".service") in _SESSION_NOISE_UNITS:
+            if stem in _SESSION_NOISE_UNITS:
                 continue
+            timer_backed = stem in active_timers
             # `inactive`/`dead` is the normal state of oneshot units and of
             # services nobody started: not an outage, and not worth a graph node
-            # on system scope (which lists ~300 units on a desktop).
-            if active in {"inactive", "dead"}:
+            # unless an active user timer schedules this oneshot unit.
+            if active in {"inactive", "dead"} and not timer_backed:
                 continue
-            healthy = "up" if active in {"active", "activating", "reloading"} else "down"
+            healthy = "up" if (active in {"active", "activating", "reloading"} or (timer_backed and active != "failed")) else "down"
             if scope == "system" and healthy == "up":
                 continue
             result.nodes.append(
                 {
-                    "id": f"svc-{_slug(name.removesuffix('.service'))}",
+                    "id": f"svc-{_slug(stem)}",
                     "kind": "service",
                     "stratum": 3,
-                    "label": name.removesuffix(".service"),
+                    "label": stem,
                     "parent_id": host_id,
                     "systemd_unit": name,
                     "managed_by": f"systemd-{scope}",
                     "health_status": healthy,
                     "live_state": {
                         "source": "local",
-                        "active": active,
+                        "active": "active (timer)" if (timer_backed and active in {"inactive", "dead"}) else active,
                         "sub": unit.get("sub"),
                         "scope": scope,
                         # Only a failed unit is an actionable outage; a stopped

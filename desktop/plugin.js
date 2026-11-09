@@ -1516,6 +1516,44 @@ function InfraAtlasPage() {
                               }, mode)
                             )
                           }),
+                          jsx('div', { className: 'ia-pop-sep' }),
+                          jsx('div', { className: 'ia-pop-title', children: 'Background Uptime Watchdog' }),
+                          jsx('div', {
+                            className: 'ia-pop-desc',
+                            children: 'Zero-token Hermes cron pre-check that only wakes the agent when an endpoint is down.'
+                          }),
+                          jsxs('div', {
+                            className: 'ia-choice-row',
+                            children: [
+                              jsx('button', {
+                                type: 'button',
+                                className: 'ia-choice',
+                                disabled: Boolean(busy),
+                                onClick: () =>
+                                  runWithBusy(setBusy, 'watchdog', async () => {
+                                    const res = await rest('/watchdog', { method: 'POST', body: { enabled: true, interval_min: 2 } })
+                                    host.notify({
+                                      kind: res && res.ok !== false ? 'info' : 'warning',
+                                      message: res && res.ok !== false ? 'Uptime watchdog enabled (every 2m)' : 'Watchdog script installed'
+                                    })
+                                    await refetch()
+                                  }),
+                                children: 'Enable (2m)'
+                              }),
+                              jsx('button', {
+                                type: 'button',
+                                className: 'ia-choice',
+                                disabled: Boolean(busy),
+                                onClick: () =>
+                                  runWithBusy(setBusy, 'watchdog', async () => {
+                                    await rest('/watchdog', { method: 'POST', body: { enabled: false } })
+                                    host.notify({ kind: 'info', message: 'Uptime watchdog paused' })
+                                    await refetch()
+                                  }),
+                                children: 'Pause'
+                              })
+                            ]
+                          }),
                           config.registry_path
                             ? jsxs('div', {
                                 className: 'ia-pop-foot',
@@ -2412,10 +2450,11 @@ function InfraCard({ nodeId }) {
 }
 
 function DriftCard() {
-  const { data } = useGraph(15000)
+  const { data, refetch } = useGraph(15000)
   const nodes = ((data && data.nodes) || []).filter(
     node => node.drift_status && node.drift_status !== 'matched' && node.drift_status !== 'doc_only' && node.drift_status !== 'observed'
   )
+  const adoptable = nodes.filter(node => node.drift_status === 'changed' || node.drift_status === 'unregistered')
   const incidents = (data && data.incidents) || []
   return jsxs('div', {
     className: 'ia-card ia-glass',
@@ -2442,12 +2481,31 @@ function DriftCard() {
         className: 'ia-row',
         children: [
           jsx('button', { type: 'button', className: 'ia-btn ia-btn-ghost', onClick: () => host.navigate(PAGE_PATH), children: 'Open Infra Atlas' }),
+          adoptable.length
+            ? jsx('button', {
+                type: 'button',
+                className: 'ia-btn ia-btn-ghost',
+                onClick: async () => {
+                  try {
+                    for (const item of adoptable) {
+                      await rest('/reconcile', { method: 'POST', body: { node_id: item.id, action: 'adopt_live' } })
+                    }
+                    await refetch()
+                    host.notify({ kind: 'info', message: `Adopted ${adoptable.length} drifted node(s) into the registry` })
+                  } catch (err) {
+                    host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
+                  }
+                },
+                children: `✓ Reconcile All (${adoptable.length})`
+              })
+            : null,
           jsx('button', {
             type: 'button',
             className: 'ia-btn ia-btn-primary',
             onClick: async () => {
               try {
                 await rest('/sweep', { method: 'POST', body: {} })
+                await refetch()
                 host.notify({ kind: 'info', message: 'Sweep completed — graph refreshed' })
               } catch (err) {
                 host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
@@ -3321,6 +3379,28 @@ export default {
                 }),
               error => host.notify({ kind: 'error', message: `Infra Atlas: ${error.message || error}` })
             )
+          }
+        }
+      },
+      {
+        id: 'guardrail',
+        area: PALETTE_AREA,
+        data: {
+          id: 'infra-atlas.guardrail',
+          label: 'Infra Atlas: cycle read-before-touch guardrail (block / warn / off)',
+          keywords: ['infra', 'atlas', 'guardrail', 'block', 'warn', 'policy'],
+          run: () => {
+            const order = ['block', 'warn', 'off']
+            void rest('/health')
+              .then(state => {
+                const current = (state && state.guardrail_mode) || 'block'
+                const next = order[(order.indexOf(current) + 1) % order.length]
+                return host
+                  .request('plugins.manage', { action: 'settings', key: ID, values: { guardrail_mode: next } })
+                  .then(() => rest('/settings', { method: 'POST', body: { guardrail_mode: next } }))
+                  .then(() => host.notify({ kind: 'info', message: `Infra Atlas guardrail set to ${next}` }))
+              })
+              .catch(error => host.notify({ kind: 'error', message: `Infra Atlas: ${error.message || error}` }))
           }
         }
       },

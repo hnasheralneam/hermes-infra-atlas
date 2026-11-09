@@ -92,7 +92,8 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
 
     matched: set[str] = set()
     id_remap: dict[str, str] = {}
-    for live in live_nodes:
+    ordered_live = sorted(live_nodes, key=lambda item: 1 if str(item.get("kind") or "") == "peer" else 0)
+    for live in ordered_live:
         live_id = str(live.get("id") or "")
         if not live_id:
             continue
@@ -140,11 +141,23 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
                 target_id = host_candidates[0]
         if target_id is None and live.get("tailnet_ip") and live_kind in {"server", "vm", "lxc", "peer"}:
             for candidate, doc in by_id.items():
-                if str(doc.get("kind")) not in {"server", "vm", "lxc"}:
+                if str(doc.get("kind")) not in {"server", "vm", "lxc", "service"}:
                     continue
                 if doc.get("host_ip") and live.get("host_ip") and str(doc["host_ip"]) != str(live["host_ip"]):
                     continue
                 if str(doc.get("tailnet_ip") or "") == str(live["tailnet_ip"]):
+                    target_id = candidate
+                    break
+        if target_id is None and live_kind == "peer" and live.get("label"):
+            peer_slug = _slug(str(live["label"]))
+            for candidate, doc in by_id.items():
+                doc_slug = _slug(str(doc.get("label") or ""))
+                if str(doc.get("kind")) in {"vm", "lxc", "server", "service"} and (
+                    doc_slug == peer_slug
+                    or candidate.endswith(f"-{peer_slug}")
+                    or (peer_slug == "ldap" and doc_slug == "openldap")
+                    or (peer_slug == "tezcatlipoca-dash" and "tezcatlipoca-dashboard" in doc_slug)
+                ):
                     target_id = candidate
                     break
         if target_id is None:
@@ -164,8 +177,8 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
         if live_id != target_id:
             id_remap[live_id] = target_id
         merged = by_id[target_id]
-        # A tailnet peer observation enriches tailnet_ip/online status without clobbering server kind/ports.
-        if live_kind == "peer" and str(merged.get("kind")) in {"server", "vm", "lxc"}:
+        # A tailnet peer observation enriches tailnet_ip/online status without clobbering server/service kind/ports.
+        if live_kind == "peer" and str(merged.get("kind")) in {"server", "vm", "lxc", "service"}:
             if not merged.get("tailnet_ip") and live.get("tailnet_ip"):
                 merged["tailnet_ip"] = live["tailnet_ip"]
             merged.setdefault("live_state", {})
@@ -208,6 +221,11 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
             guest_id = guest_by_vmid.get(int(node["vmid"]))
             if guest_id and guest_id != node["id"]:
                 node["parent_id"] = guest_id
+                guest = by_id.get(guest_id) or {}
+                if not node.get("probe") and not node.get("_live") and guest.get("health_status") == "up":
+                    node["health_status"] = "up"
+                    node["last_seen_live_at"] = guest.get("last_seen_live_at") or time.time()
+                    node["live_state"] = {**(node.get("live_state") or {}), "source": "proxmox-guest", "guest_id": guest_id}
         if not node.get("parent_id") and node.get("host_ip") in host_by_ip:
             parent_id = host_by_ip[str(node["host_ip"])]
             if parent_id != node["id"]:
@@ -223,6 +241,13 @@ def _classify(node: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]
     health = str(node.get("health_status") or "unknown")
 
     if node.get("_runtime"):
+        if str(node.get("kind") or "") == "cron" and health in {"degraded", "down"}:
+            cron_reasons = list(
+                (node.get("live_state") or {}).get("reasons")
+                or (live.get("live_state") or {}).get("reasons")
+                or [f"cron health is {health}"]
+            )
+            return "changed", cron_reasons, []
         return "matched", [], []
     if str(node.get("kind") or "") == "peer" and not node.get("registry_path"):
         # A device on the tailnet we do not operate as infrastructure: it belongs
