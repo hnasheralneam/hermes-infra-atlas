@@ -227,3 +227,15 @@ def test_read_only_path_initialises_the_store_itself(plugin_home):
     nodes = fresh.list_nodes_ro()
     assert [node["id"] for node in nodes] == ["svc-ro"]
     assert fresh.has_session_read_ro("nobody", "svc-ro") is False
+
+
+def test_the_declared_probe_survives_persistence(plugin_home):
+    """The parsed `probe:` line is what the guardrail and prober must see."""
+    H.load_plugin()
+    store = H.submodule("store").get_store()
+    store.upsert_node(
+        {"id": "svc-p", "label": "p", "kind": "service", "probe": "http://10.0.0.143:3017/", "ports": ["3017"]}
+    )
+    node = store.get_node("svc-p")
+    assert node["probe"] == "http://10.0.0.143:3017/"
+    assert node["probe_inferred"] is False

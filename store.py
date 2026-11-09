@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     registry_hash TEXT,
     pitfalls_summary TEXT,
     recovery_cmd TEXT,
+    probe TEXT,
+    probe_inferred INTEGER NOT NULL DEFAULT 0,
     auto_heal_policy TEXT NOT NULL DEFAULT 'inherit',
     doc_state_json TEXT NOT NULL DEFAULT '{}',
     live_state_json TEXT NOT NULL DEFAULT '{}',
@@ -155,6 +157,7 @@ def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
     node["doc_state"] = _json(node.get("doc_state_json"), {})
     node["live_state"] = _json(node.get("live_state_json"), {})
     node["drift_reasons"] = _json(node.get("drift_reasons_json"), [])
+    node["probe_inferred"] = bool(node.get("probe_inferred"))
     for key in _JSON_FIELDS:
         node.pop(key, None)
     return node
@@ -336,7 +339,20 @@ class AtlasStore:
         row = self._conn.execute("PRAGMA database_list").fetchone()
         self._db_path = str(row[2]) if row and row[2] else ""
         self._conn.executescript(SCHEMA)
-        self._conn.commit()
+        self._commit_with_retry()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        with self._lock:
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(nodes)").fetchall()}
+            for name, ddl in (
+                ("probe", "probe TEXT"),
+                ("probe_inferred", "probe_inferred INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in columns:
+                    self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {ddl}")
+            self._commit_with_retry()
 
     def _write(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         """One write. ``_run`` already retries and releases the lock on failure."""
@@ -389,6 +405,8 @@ class AtlasStore:
                 "registry_hash": merged.get("registry_hash"),
                 "pitfalls_summary": merged.get("pitfalls_summary"),
                 "recovery_cmd": merged.get("recovery_cmd"),
+                "probe": merged.get("probe"),
+                "probe_inferred": 1 if merged.get("probe_inferred") else 0,
                 "auto_heal_policy": merged.get("auto_heal_policy") or "inherit",
                 "doc_state_json": json.dumps(merged.get("doc_state") or {}),
                 "live_state_json": json.dumps(merged.get("live_state") or {}),

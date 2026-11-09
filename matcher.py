@@ -192,6 +192,13 @@ def _match_scored(store, text: str) -> list[tuple[dict[str, Any], int]]:
 
     def score(node_id: str) -> int:
         node = cache["nodes"].get(node_id) or {}
+        # The entry that declares this probe owns this address:port, even when a
+        # noisy neighbour lists the same port.
+        probe = str(node.get("probe") or "").strip().lower()
+        if probe:
+            target = probe.replace("tcp://", "").replace("http://", "").replace("https://", "").rstrip("/")
+            if probe in haystack or (target and target in haystack):
+                return 4
         # Naming the node (unit, id, label, entry path) beats sharing an address
         # with it; an address:port pair names the service on that port.
         if hits[node_id] & _primary_tokens(node):
