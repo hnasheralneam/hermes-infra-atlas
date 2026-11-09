@@ -14,7 +14,7 @@
 
 import { cn, host, STATUSBAR_AREAS, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, TRANSCRIPT_DIRECTIVE_AREA, useQuery } from '@hermes/plugin-sdk'
 import * as React from 'react'
-import { jsx, jsxs, Fragment, memo, useMemo, useCallback } from 'react/jsx-runtime'
+import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
 
 const ID = 'infra-atlas'
 const PAGE_PATH = '/infra-atlas'
@@ -175,7 +175,7 @@ function useGraph(interval = 10000) {
   
   // Add custom comparison to avoid re-renders when data hasn't meaningfully changed
   const prevDataRef = React.useRef(null)
-  const shouldSkip = React.useMemo(() => {
+  const shouldSkip = React.React.useMemo(() => {
     const current = result.data
     const prev = prevDataRef.current
     
@@ -214,7 +214,7 @@ function useNode(nodeId) {
   
   // For node data, we can be more aggressive with caching since it changes less frequently
   const prevDataRef = React.useRef(null)
-  const shouldSkip = React.useMemo(() => {
+  const shouldSkip = React.React.useMemo(() => {
     const current = result.data
     const prev = prevDataRef.current
     
@@ -667,19 +667,11 @@ function smoothPath(points) {
   return { d, length, angle, end: last }
 }
 
-// OPTIMIZED: Cached edge routing with congestion tracking
+// OPTIMIZED: edge routing (caller memoizes; clear per-path cache per plan layout)
 function routeEdges(edges, plan) {
   if (!plan.platforms.length) return []
-  
-  // Create congestion map key based on edges
-  const edgeListKey = edges.map(e => edgeKey(e)).join(';')
-  const planKey = sceneCacheKey(plan.platforms.map(p => p.t))
-  const cacheKey = `routes:${edgeListKey}:${planKey}`
-  
-  // Return cached result if available
-  if (congestionCache.has(cacheKey)) {
-    return congestionCache.get(cacheKey)
-  }
+  // Per-path cache is only valid for the current plan/layout; clear to keep routes correct.
+  edgeRouteCache.clear()
   
   const congestion = new Map()
 
@@ -777,10 +769,6 @@ function routeEdges(edges, plan) {
       style
     }
   })
-  
-  // Cache the result
-  congestionCache.set(cacheKey, result)
-  
   return result
 }
 
@@ -1675,7 +1663,7 @@ const IsoCubeMark = () =>
 
 // ── topology ───────────────────────────────────────────────────────────────
 // OPTIMIZED: Memoized platform components
-const PlatformView = memo(function PlatformView({ platform, next, sel }) {
+const PlatformView = React.memo(function PlatformView({ platform, next, sel }) {
   const p = platform
   const z = p.z
   const A = { x: projX(p.L, p.P), y: projY(p.L, p.P, z) }
@@ -1693,7 +1681,7 @@ const PlatformView = memo(function PlatformView({ platform, next, sel }) {
     : null
   
   // OPTIMIZED: Pre-calculate grid lines once
-  const grid = useMemo(() => {
+  const grid = React.useMemo(() => {
     let g = ''
     for (let gx = p.L + 1; gx < p.L + p.W; gx++) g += `M ${r2(projX(gx, p.P))} ${r2(projY(gx, p.P, z))} L ${r2(projX(gx, p.P + p.D))} ${r2(projY(gx, p.P + p.D, z))} `
     for (let gy = p.P + 1; gy < p.P + p.D; gy++) g += `M ${r2(projX(p.L, gy))} ${r2(projY(p.L, gy, z))} L ${r2(projX(p.L + p.W, gy))} ${r2(projY(p.L + p.W, gy, z))} `
@@ -1719,7 +1707,7 @@ const PlatformView = memo(function PlatformView({ platform, next, sel }) {
 // stratum labels ride the right end of each terrace's front face; they render
 // after every platform so a lower terrace can never paint over them
 // OPTIMIZED: Memoized label
-const PlatformLabel = memo(function PlatformLabel({ platform }) {
+const PlatformLabel = React.memo(function PlatformLabel({ platform }) {
   const p = platform
   const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, p.z) }
   return jsx('text', {
@@ -1733,35 +1721,35 @@ const PlatformLabel = memo(function PlatformLabel({ platform }) {
 })
 
 // OPTIMIZED: Memoized EdgeView with stable props
-const EdgeView = memo(function EdgeView({ route, selectedId, hoverId, onSelect, pulseFor, labelHint, onTagShow, onTagMove, onTagHide }) {
+const EdgeView = React.memo(function EdgeView({ route, selectedId, hoverId, onSelect, pulseFor, labelHint, onTagShow, onTagMove, onTagHide }) {
   const { edge, style } = route
-  const touches = useCallback(id => edge.source_id === id || edge.target_id === id, [edge.source_id, edge.target_id])
+  const touches = React.useCallback(id => edge.source_id === id || edge.target_id === id, [edge.source_id, edge.target_id])
   const hot = Boolean(selectedId) && touches(selectedId)
   const nb = !hot && Boolean(hoverId) && touches(hoverId)
   const dim = Boolean(selectedId) && !hot && !nb
   const burst = pulseFor && (pulseFor(edge.source_id) === 'touch_blocked' || pulseFor(edge.target_id) === 'touch_blocked')
   
   // OPTIMIZED: Cache regex and end point calculation
-  const end = useMemo(() => {
+  const end = React.useMemo(() => {
     const endMatch = /L\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/.exec(route.d)
     return endMatch ? { x: Number(endMatch[1]), y: Number(endMatch[2]) } : route.chevron
   }, [route.d, route.chevron])
   
   // OPTIMIZED: Memoized event handlers
-  const handleClick = useCallback(event => {
+  const handleClick = React.useCallback(event => {
     event.stopPropagation()
     if (onSelect) onSelect(edge.source_id)
   }, [edge.source_id, onSelect])
   
-  const handlePointerEnter = useCallback(event => {
+  const handlePointerEnter = React.useCallback(event => {
     if (onTagShow) onTagShow(labelHint, style.color, event)
   }, [labelHint, style.color, onTagShow])
   
-  const handlePointerMove = useCallback(event => {
+  const handlePointerMove = React.useCallback(event => {
     if (onTagMove) onTagMove(event)
   }, [onTagMove])
   
-  const handlePointerLeave = useCallback(() => {
+  const handlePointerLeave = React.useCallback(() => {
     if (onTagHide) onTagHide()
   }, [onTagHide])
   
@@ -1817,9 +1805,9 @@ const ZOOM_MAX = 2.4
 const ZOOM_STEP = 1.2
 
 // OPTIMIZED: Memoized Topology component with useCallback for handlers
-const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
-  const plan = React.useMemo(() => planScene(nodes), [nodes])
-  const routed = React.useMemo(() => routeEdges(edges, plan), [edges, plan])
+const Topology = React.memo(function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
+  const plan = React.React.useMemo(() => planScene(nodes), [nodes])
+  const routed = React.React.useMemo(() => routeEdges(edges, plan), [edges, plan])
   const [zoom, setZoom] = React.useState(1)
   const [offset, setOffset] = React.useState({ x: 0, y: 0 })
   const [hoverNode, setHoverNode] = React.useState(null) // node id under the pointer
@@ -1831,15 +1819,15 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
 
   const viewBox = `${-offset.x} ${-offset.y} ${plan.width / zoom} ${plan.height / zoom}`
 
-  const zoomIn = useCallback(() => setZoom(z => Math.min(ZOOM_MAX, z * ZOOM_STEP)), [])
-  const zoomOut = useCallback(() => setZoom(z => Math.max(ZOOM_MIN, z / ZOOM_STEP)), [])
-  const resetView = useCallback(() => {
+  const zoomIn = React.useCallback(() => setZoom(z => Math.min(ZOOM_MAX, z * ZOOM_STEP)), [])
+  const zoomOut = React.useCallback(() => setZoom(z => Math.max(ZOOM_MIN, z / ZOOM_STEP)), [])
+  const resetView = React.useCallback(() => {
     setZoom(1)
     setOffset({ x: 0, y: 0 })
   }, [])
 
   // OPTIMIZED: Throttled pointer move for better performance
-  const onPointerMove = useCallback(throttle(event => {
+  const onPointerMove = React.useCallback(throttle(event => {
     if (!dragRef.current) return
     const dx = (event.clientX - dragRef.current.x) / zoom
     const dy = (event.clientY - dragRef.current.y) / zoom
@@ -1847,7 +1835,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
     setOffset({ x: dragRef.current.ox + dx, y: dragRef.current.oy + dy })
   }, 16), [zoom])
 
-  const onPointerDown = useCallback(event => {
+  const onPointerDown = React.useCallback(event => {
     const target = event.target
     if (target && target.closest && (target.closest('[data-node-id]') || target.closest('.ia-edge-hit'))) return
     setEdgeTag(null)
@@ -1855,20 +1843,20 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }, [offset.x, offset.y])
 
-  const onPointerUp = useCallback(() => {
+  const onPointerUp = React.useCallback(() => {
     dragRef.current = null
   }, [])
 
   // node hover via delegation, so IsoNode stays untouched; setState bails out
   // on identical values, so jittering inside one shape never re-renders
-  const onNodeOver = useCallback(event => {
+  const onNodeOver = React.useCallback(event => {
     const g = event.target && event.target.closest && event.target.closest('[data-node-id]')
     if (!g) return
     const id = g.getAttribute('data-node-id')
     if (id !== hoverNode) setHoverNode(id)
   }, [hoverNode])
 
-  const onNodeOut = useCallback(event => {
+  const onNodeOut = React.useCallback(event => {
     if (!hoverNode) return
     const to = event.relatedTarget
     if (to && to.closest && to.closest('[data-node-id]')) return // still on a shape; over() owns the switch
@@ -1877,7 +1865,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
 
   // relation tag follows the cursor; moves are DOM-only (transform) so hover
   // never triggers a React render storm — state flips only on enter/leave
-  const placeTag = useCallback(event => {
+  const placeTag = React.useCallback(event => {
     const el = tagRef.current
     const wrap = wrapRef.current
     if (!el || !wrap) return
@@ -1888,20 +1876,20 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
     el.style.transform = `translate(${Math.round(flip ? px - 196 : px + 14)}px, ${Math.round(py + 16)}px)`
   }, [])
 
-  const showTag = useCallback((label, color, event) => {
+  const showTag = React.useCallback((label, color, event) => {
     placeTag(event)
     setEdgeTag({ label, color })
   }, [placeTag])
 
-  const moveTag = useCallback(event => {
+  const moveTag = React.useCallback(event => {
     if (edgeTag) placeTag(event)
   }, [edgeTag, placeTag])
 
-  const hideTag = useCallback(() => setEdgeTag(null), [])
+  const hideTag = React.useCallback(() => setEdgeTag(null), [])
 
   // keyboard pan/zoom on the focused canvas: arrows move the camera, +/− zoom,
   // 0 resets to the default framing
-  const onKeyDown = useCallback(event => {
+  const onKeyDown = React.useCallback(event => {
     const key = event.key
     const step = 56 / zoom
     if (key === 'ArrowLeft') { setOffset(o => ({ ...o, x: o.x + step })); event.preventDefault() }
@@ -1914,7 +1902,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
   }, [zoom, zoomIn, zoomOut, resetView])
 
   // depth order (painter's algorithm); new ids get the drop-in entrance
-  const ordered = React.useMemo(() => {
+  const ordered = React.React.useMemo(() => {
     const seen = seenRef.current || (seenRef.current = new Set())
     const list = Array.from(plan.placed.values())
       .sort((a, b) => a.u - b.u || a.gx - b.gx)
@@ -1927,7 +1915,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
   }, [plan])
   
   // OPTIMIZED: Viewport culling - only render visible nodes
-  const visibleOrdered = React.useMemo(() => {
+  const visibleOrdered = React.React.useMemo(() => {
     const viewLeft = -offset.x
     const viewRight = -offset.x + plan.width / zoom
     const viewTop = -offset.y
@@ -1950,7 +1938,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
   }, [ordered, offset, zoom, plan])
 
   // direct neighbours of the hovered node, for the hover highlight
-  const neighbors = React.useMemo(() => {
+  const neighbors = React.React.useMemo(() => {
     const map = new Map()
     edges.forEach(edge => {
       if (!map.has(edge.source_id)) map.set(edge.source_id, new Set())
@@ -1963,7 +1951,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
 
   const selT = selectedId && plan.placed.get(selectedId) ? plan.placed.get(selectedId).t : null
 
-  const notable = useCallback(node =>
+  const notable = React.useCallback(node =>
     (node.drift_status && node.drift_status !== 'matched') ||
     node.health_status === 'down' ||
     node.health_status === 'degraded', [])
@@ -1971,7 +1959,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
   const showTitle = zoom >= 0.8
   const showAddress = zoom >= 1.25
 
-  const labelHintOf = useCallback(route => {
+  const labelHintOf = React.useCallback(route => {
     const from = plan.placed.get(route.edge.source_id)
     const to = plan.placed.get(route.edge.target_id)
     return `${(from && from.node && from.node.label) || route.edge.source_id} —${route.edge.relation}→ ${(to && to.node && to.node.label) || route.edge.target_id}`
@@ -2061,7 +2049,7 @@ const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pu
       })
     ]
   })
-}
+})
 
 const pulseColor = kind =>
   kind === 'touch_blocked'
