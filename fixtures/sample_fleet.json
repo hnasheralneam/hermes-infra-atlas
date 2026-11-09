@@ -1,1957 +1,1959 @@
 {
- "name": "DawgSec demo fleet",
- "sanitized": true,
- "generated_at": 1794119274.424381,
- "nodes": [
-  {
-   "kind": "server",
-   "stratum": 1,
-   "parent_id": null,
-   "host_ip": "10.20.0.10",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "8006",
-    "22"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 3.1,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "srv-olympus-pve",
-   "label": "olympus-pve",
-   "doc_state": {
-    "id": "srv-olympus-pve",
-    "kind": "server",
-    "label": "olympus-pve",
-    "host_ip": "10.20.0.10",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8006",
-     "22"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.10",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8006",
-     "22"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "server",
-   "stratum": 1,
-   "parent_id": null,
-   "host_ip": "10.20.0.50",
-   "tailnet_ip": "100.64.0.50",
-   "vmid": null,
-   "ports": [
-    "22",
-    "8080"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": "Start llama-server through the Control API on :8081/api/start, never directly.",
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 1.8,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "srv-athena-ai",
-   "label": "athena-ai",
-   "doc_state": {
-    "id": "srv-athena-ai",
-    "kind": "server",
-    "label": "athena-ai",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": "100.64.0.50",
-    "vmid": null,
-    "ports": [
-     "22",
-     "8080"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": "100.64.0.50",
-    "vmid": null,
-    "ports": [
-     "22",
-     "8080"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "server",
-   "stratum": 1,
-   "parent_id": null,
-   "host_ip": "10.20.0.1",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "443",
-    "8080"
-   ],
-   "managed_by": "headscale",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 2.4,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "srv-bastion-gw",
-   "label": "bastion-gw",
-   "doc_state": {
-    "id": "srv-bastion-gw",
-    "kind": "server",
-    "label": "bastion-gw",
-    "host_ip": "10.20.0.1",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "443",
-     "8080"
-    ],
-    "managed_by": "headscale",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.1",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "443",
-     "8080"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "lxc",
-   "stratum": 2,
-   "parent_id": "srv-olympus-pve",
-   "host_ip": "10.20.0.212",
-   "tailnet_ip": null,
-   "vmid": 201,
-   "ports": [
-    "4000"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 2.9,
-   "uptime_24h_pct": 99.98,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "lxc-201-litellm",
-   "label": "litellm-gateway",
-   "doc_state": {
-    "id": "lxc-201-litellm",
-    "kind": "lxc",
-    "label": "litellm-gateway",
-    "host_ip": "10.20.0.212",
-    "tailnet_ip": null,
-    "vmid": 201,
-    "ports": [
-     "4000"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.212",
-    "tailnet_ip": null,
-    "vmid": 201,
-    "ports": [
-     "4000"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "lxc",
-   "stratum": 2,
-   "parent_id": "srv-olympus-pve",
-   "host_ip": "10.20.0.218",
-   "tailnet_ip": null,
-   "vmid": 218,
-   "ports": [
-    "443",
-    "55000"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "unregistered",
-   "drift_reasons": [
-    "Live LXC 218 (wazuh-siem) has no registry entry"
-   ],
-   "health_status": "up",
-   "latency_ms": 8.2,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "lxc-218-wazuh",
-   "label": "wazuh-siem",
-   "doc_state": {
-    "id": "lxc-218-wazuh",
-    "kind": "lxc",
-    "label": "wazuh-siem",
-    "host_ip": "10.20.0.218",
-    "tailnet_ip": null,
-    "vmid": 218,
-    "ports": [
-     "443",
-     "55000"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.218",
-    "tailnet_ip": null,
-    "vmid": 218,
-    "ports": [
-     "443",
-     "55000"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "vm",
-   "stratum": 2,
-   "parent_id": "srv-olympus-pve",
-   "host_ip": "10.20.1.104",
-   "tailnet_ip": null,
-   "vmid": 104,
-   "ports": [
-    "389",
-    "445"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 6.4,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "vm-104-blueteam-ad",
-   "label": "blueteam-ad",
-   "doc_state": {
-    "id": "vm-104-blueteam-ad",
-    "kind": "vm",
-    "label": "blueteam-ad",
-    "host_ip": "10.20.1.104",
-    "tailnet_ip": null,
-    "vmid": 104,
-    "ports": [
-     "389",
-     "445"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.1.104",
-    "tailnet_ip": null,
-    "vmid": 104,
-    "ports": [
-     "389",
-     "445"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "vm",
-   "stratum": 2,
-   "parent_id": "srv-olympus-pve",
-   "host_ip": "10.20.1.108",
-   "tailnet_ip": null,
-   "vmid": 108,
-   "ports": [
-    "8443"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 7.7,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "vm-108-scoring-engine",
-   "label": "scoring-engine",
-   "doc_state": {
-    "id": "vm-108-scoring-engine",
-    "kind": "vm",
-    "label": "scoring-engine",
-    "host_ip": "10.20.1.108",
-    "tailnet_ip": null,
-    "vmid": 108,
-    "ports": [
-     "8443"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.1.108",
-    "tailnet_ip": null,
-    "vmid": 108,
-    "ports": [
-     "8443"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "lxc",
-   "stratum": 2,
-   "parent_id": "srv-olympus-pve",
-   "host_ip": "10.20.0.205",
-   "tailnet_ip": null,
-   "vmid": 205,
-   "ports": [
-    "3000",
-    "22"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 5.1,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "lxc-205-forgejo",
-   "label": "forgejo",
-   "doc_state": {
-    "id": "lxc-205-forgejo",
-    "kind": "lxc",
-    "label": "forgejo",
-    "host_ip": "10.20.0.205",
-    "tailnet_ip": null,
-    "vmid": 205,
-    "ports": [
-     "3000",
-     "22"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.205",
-    "tailnet_ip": null,
-    "vmid": 205,
-    "ports": [
-     "3000",
-     "22"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "lxc",
-   "stratum": 2,
-   "parent_id": "srv-olympus-pve",
-   "host_ip": "10.20.0.209",
-   "tailnet_ip": null,
-   "vmid": 209,
-   "ports": [
-    "443"
-   ],
-   "managed_by": "proxmox",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 9.9,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "lxc-209-nextcloud",
-   "label": "nextcloud",
-   "doc_state": {
-    "id": "lxc-209-nextcloud",
-    "kind": "lxc",
-    "label": "nextcloud",
-    "host_ip": "10.20.0.209",
-    "tailnet_ip": null,
-    "vmid": 209,
-    "ports": [
-     "443"
-    ],
-    "managed_by": "proxmox",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.209",
-    "tailnet_ip": null,
-    "vmid": 209,
-    "ports": [
-     "443"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "service",
-   "stratum": 3,
-   "parent_id": "lxc-201-litellm",
-   "host_ip": "10.20.0.212",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "4000"
-   ],
-   "managed_by": "systemd-system",
-   "systemd_unit": "litellm.service",
-   "project_path": null,
-   "registry_path": "services/litellm.md",
-   "pitfalls_summary": "Dial 10.20.0.212:4000 directly; the old 10.20.0.50 front was removed.",
-   "recovery_cmd": "systemctl restart litellm.service",
-   "auto_heal_policy": "auto",
-   "drift_status": "changed",
-   "drift_reasons": [
-    "host_ip: registry says 10.20.0.50, live is 10.20.0.212",
-    "ports: registry says 4000 on 10.20.0.50, live listens on 10.20.0.212:4000"
-   ],
-   "health_status": "up",
-   "latency_ms": 11.4,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "svc-litellm-proxy",
-   "label": "LiteLLM proxy",
-   "probe": "http://10.20.0.212:4000/health/liveliness",
-   "doc_state": {
-    "id": "svc-litellm-proxy",
-    "kind": "service",
-    "label": "LiteLLM proxy",
-    "host_ip": "10.20.0.212",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "4000"
-    ],
-    "managed_by": "systemd-system",
-    "systemd_unit": "litellm.service",
-    "recovery_cmd": "systemctl restart litellm.service"
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.212",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "4000"
-    ],
-    "systemd_unit": "litellm.service"
-   }
-  },
-  {
-   "kind": "service",
-   "stratum": 3,
-   "parent_id": "srv-athena-ai",
-   "host_ip": "10.20.0.50",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "8081"
-   ],
-   "managed_by": "systemd-user",
-   "systemd_unit": "llama-dashboard.service",
-   "project_path": null,
-   "registry_path": "services/llama-dashboard.md",
-   "pitfalls_summary": "llama-server is started and stopped through Control on :8081, never from a shell.",
-   "recovery_cmd": "systemctl --user restart llama-dashboard.service",
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 4.2,
-   "uptime_24h_pct": 99.91,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "svc-llama-dashboard",
-   "label": "llama-dashboard",
-   "probe": "http://10.20.0.50:8081/api/status",
-   "doc_state": {
-    "id": "svc-llama-dashboard",
-    "kind": "service",
-    "label": "llama-dashboard",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8081"
-    ],
-    "managed_by": "systemd-user",
-    "systemd_unit": "llama-dashboard.service",
-    "recovery_cmd": "systemctl --user restart llama-dashboard.service"
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8081"
-    ],
-    "systemd_unit": "llama-dashboard.service"
-   }
-  },
-  {
-   "kind": "service",
-   "stratum": 3,
-   "parent_id": "lxc-218-wazuh",
-   "host_ip": "10.20.0.218",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "443",
-    "55000"
-   ],
-   "managed_by": "docker-compose",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "notify_only",
-   "drift_status": "unregistered",
-   "drift_reasons": [
-    "Discovered live on 10.20.0.218:443 with no registry entry"
-   ],
-   "health_status": "up",
-   "latency_ms": 42.0,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "svc-wazuh-siem",
-   "label": "Wazuh SIEM",
-   "probe": "https://10.20.0.218/",
-   "doc_state": {
-    "id": "svc-wazuh-siem",
-    "kind": "service",
-    "label": "Wazuh SIEM",
-    "host_ip": "10.20.0.218",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "443",
-     "55000"
-    ],
-    "managed_by": "docker-compose",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.218",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "443",
-     "55000"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "service",
-   "stratum": 3,
-   "parent_id": "srv-athena-ai",
-   "host_ip": "10.20.0.50",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "8087"
-   ],
-   "managed_by": "systemd-user",
-   "systemd_unit": "inject-portal.service",
-   "project_path": null,
-   "registry_path": "services/inject-portal.md",
-   "pitfalls_summary": "Bound to 127.0.0.1 only; probing the tailnet address always fails.",
-   "recovery_cmd": "systemctl --user restart inject-portal.service",
-   "auto_heal_policy": "auto",
-   "drift_status": "stale",
-   "drift_reasons": [
-    "Registry says active on :8087; probe has failed 3x (connection refused)"
-   ],
-   "health_status": "down",
-   "latency_ms": null,
-   "uptime_24h_pct": 87.4,
-   "failure_streak": 3,
-   "last_seen_live_at": 1794118634.424381,
-   "id": "svc-inject-portal",
-   "label": "inject-portal",
-   "probe": "http://10.20.0.50:8087/",
-   "doc_state": {
-    "id": "svc-inject-portal",
-    "kind": "service",
-    "label": "inject-portal",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8087"
-    ],
-    "managed_by": "systemd-user",
-    "systemd_unit": "inject-portal.service",
-    "recovery_cmd": "systemctl --user restart inject-portal.service"
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8087"
-    ],
-    "systemd_unit": "inject-portal.service"
-   }
-  },
-  {
-   "kind": "service",
-   "stratum": 3,
-   "parent_id": "srv-bastion-gw",
-   "host_ip": "10.20.0.1",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "8080"
-   ],
-   "managed_by": "systemd-system",
-   "systemd_unit": "headscale.service",
-   "project_path": null,
-   "registry_path": "services/headscale.md",
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 3.3,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "svc-headscale",
-   "label": "Headscale",
-   "probe": "http://10.20.0.1:8080/health",
-   "doc_state": {
-    "id": "svc-headscale",
-    "kind": "service",
-    "label": "Headscale",
-    "host_ip": "10.20.0.1",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8080"
-    ],
-    "managed_by": "systemd-system",
-    "systemd_unit": "headscale.service",
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.1",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8080"
-    ],
-    "systemd_unit": "headscale.service"
-   }
-  },
-  {
-   "kind": "service",
-   "stratum": 3,
-   "parent_id": "lxc-205-forgejo",
-   "host_ip": "10.20.0.205",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "3000"
-   ],
-   "managed_by": "docker-compose",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": "services/forgejo.md",
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "playbook_only",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 6.8,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "svc-forgejo",
-   "label": "Forgejo",
-   "probe": "http://10.20.0.205:3000/api/healthz",
-   "doc_state": {
-    "id": "svc-forgejo",
-    "kind": "service",
-    "label": "Forgejo",
-    "host_ip": "10.20.0.205",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "3000"
-    ],
-    "managed_by": "docker-compose",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.205",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "3000"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "service",
-   "stratum": 3,
-   "parent_id": "vm-108-scoring-engine",
-   "host_ip": "10.20.1.108",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "8443"
-   ],
-   "managed_by": "docker-compose",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": "services/quotient.md",
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 18.5,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "svc-quotient-scoring",
-   "label": "Quotient scoring",
-   "probe": "https://10.20.1.108:8443/health",
-   "doc_state": {
-    "id": "svc-quotient-scoring",
-    "kind": "service",
-    "label": "Quotient scoring",
-    "host_ip": "10.20.1.108",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8443"
-    ],
-    "managed_by": "docker-compose",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.1.108",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8443"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "project",
-   "stratum": 3,
-   "parent_id": "srv-athena-ai",
-   "host_ip": null,
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [],
-   "managed_by": "git",
-   "systemd_unit": null,
-   "project_path": "/srv/range-automation",
-   "registry_path": "projects/range-automation.md",
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "doc_only",
-   "drift_reasons": [],
-   "health_status": "unknown",
-   "latency_ms": null,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "proj-range-automation",
-   "label": "range-automation",
-   "doc_state": {
-    "id": "proj-range-automation",
-    "kind": "project",
-    "label": "range-automation",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "managed_by": "git",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "agent",
-   "stratum": 4,
-   "parent_id": null,
-   "host_ip": null,
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [],
-   "managed_by": "hermes",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": "services/hermes-gateway.md",
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 1.1,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "agent-hermes-ops",
-   "label": "Hermes (ops)",
-   "live_state": {
-    "source": "fixture",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "systemd_unit": null
-   },
-   "doc_state": {
-    "id": "agent-hermes-ops",
-    "kind": "agent",
-    "label": "Hermes (ops)",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "managed_by": "hermes",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   }
-  },
-  {
-   "kind": "model_endpoint",
-   "stratum": 4,
-   "parent_id": null,
-   "host_ip": "10.20.0.50",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "8080"
-   ],
-   "managed_by": "hermes-config",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 21.0,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "model-qwen-local",
-   "label": "Local vLLM (B70)",
-   "probe": "http://10.20.0.50:8080/v1/models",
-   "doc_state": {
-    "id": "model-qwen-local",
-    "kind": "model_endpoint",
-    "label": "Local vLLM (B70)",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8080"
-    ],
-    "managed_by": "hermes-config",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.50",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "8080"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "model_endpoint",
-   "stratum": 4,
-   "parent_id": null,
-   "host_ip": "10.20.0.212",
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [
-    "4000"
-   ],
-   "managed_by": "hermes-config",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": 12.6,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "model-litellm-pool",
-   "label": "LiteLLM pool",
-   "probe": "http://10.20.0.212:4000/v1/models",
-   "doc_state": {
-    "id": "model-litellm-pool",
-    "kind": "model_endpoint",
-    "label": "LiteLLM pool",
-    "host_ip": "10.20.0.212",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "4000"
-    ],
-    "managed_by": "hermes-config",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   },
-   "live_state": {
-    "source": "fixture",
-    "host_ip": "10.20.0.212",
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [
-     "4000"
-    ],
-    "systemd_unit": null
-   }
-  },
-  {
-   "kind": "cron",
-   "stratum": 4,
-   "parent_id": "agent-hermes-ops",
-   "host_ip": null,
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [],
-   "managed_by": "hermes-cron",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "matched",
-   "drift_reasons": [],
-   "health_status": "up",
-   "latency_ms": null,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "cron-fleet-heartbeat",
-   "label": "cron: fleet-heartbeat",
-   "live_state": {
-    "source": "fixture",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "systemd_unit": null
-   },
-   "doc_state": {
-    "id": "cron-fleet-heartbeat",
-    "kind": "cron",
-    "label": "cron: fleet-heartbeat",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "managed_by": "hermes-cron",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   }
-  },
-  {
-   "kind": "cron",
-   "stratum": 4,
-   "parent_id": "agent-hermes-ops",
-   "host_ip": null,
-   "tailnet_ip": null,
-   "vmid": null,
-   "ports": [],
-   "managed_by": "hermes-cron",
-   "systemd_unit": null,
-   "project_path": null,
-   "registry_path": null,
-   "pitfalls_summary": null,
-   "recovery_cmd": null,
-   "auto_heal_policy": "auto",
-   "drift_status": "changed",
-   "drift_reasons": [
-    "stale: last ran 38h ago (every 24h)"
-   ],
-   "health_status": "degraded",
-   "latency_ms": null,
-   "uptime_24h_pct": 100.0,
-   "failure_streak": 0,
-   "last_seen_live_at": 1794119274.424381,
-   "id": "cron-nightly-backup",
-   "label": "cron: nightly-backup",
-   "live_state": {
-    "source": "fixture",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "systemd_unit": null
-   },
-   "doc_state": {
-    "id": "cron-nightly-backup",
-    "kind": "cron",
-    "label": "cron: nightly-backup",
-    "host_ip": null,
-    "tailnet_ip": null,
-    "vmid": null,
-    "ports": [],
-    "managed_by": "hermes-cron",
-    "systemd_unit": null,
-    "recovery_cmd": null
-   }
-  }
- ],
- "edges": [
-  {
-   "source_id": "srv-olympus-pve",
-   "target_id": "lxc-201-litellm",
-   "relation": "hosts",
-   "origin": "live"
-  },
-  {
-   "source_id": "srv-olympus-pve",
-   "target_id": "lxc-218-wazuh",
-   "relation": "hosts",
-   "origin": "live"
-  },
-  {
-   "source_id": "srv-olympus-pve",
-   "target_id": "vm-104-blueteam-ad",
-   "relation": "hosts",
-   "origin": "live"
-  },
-  {
-   "source_id": "srv-olympus-pve",
-   "target_id": "vm-108-scoring-engine",
-   "relation": "hosts",
-   "origin": "live"
-  },
-  {
-   "source_id": "srv-olympus-pve",
-   "target_id": "lxc-205-forgejo",
-   "relation": "hosts",
-   "origin": "live"
-  },
-  {
-   "source_id": "srv-olympus-pve",
-   "target_id": "lxc-209-nextcloud",
-   "relation": "hosts",
-   "origin": "live"
-  },
-  {
-   "source_id": "lxc-201-litellm",
-   "target_id": "svc-litellm-proxy",
-   "relation": "hosts",
-   "origin": "both"
-  },
-  {
-   "source_id": "srv-athena-ai",
-   "target_id": "svc-llama-dashboard",
-   "relation": "hosts",
-   "origin": "both"
-  },
-  {
-   "source_id": "srv-athena-ai",
-   "target_id": "svc-inject-portal",
-   "relation": "hosts",
-   "origin": "both"
-  },
-  {
-   "source_id": "lxc-218-wazuh",
-   "target_id": "svc-wazuh-siem",
-   "relation": "hosts",
-   "origin": "live"
-  },
-  {
-   "source_id": "srv-bastion-gw",
-   "target_id": "svc-headscale",
-   "relation": "hosts",
-   "origin": "both"
-  },
-  {
-   "source_id": "lxc-205-forgejo",
-   "target_id": "svc-forgejo",
-   "relation": "hosts",
-   "origin": "both"
-  },
-  {
-   "source_id": "vm-108-scoring-engine",
-   "target_id": "svc-quotient-scoring",
-   "relation": "hosts",
-   "origin": "both"
-  },
-  {
-   "source_id": "agent-hermes-ops",
-   "target_id": "model-qwen-local",
-   "relation": "uses_model",
-   "origin": "live"
-  },
-  {
-   "source_id": "agent-hermes-ops",
-   "target_id": "model-litellm-pool",
-   "relation": "uses_model",
-   "origin": "live"
-  },
-  {
-   "source_id": "cron-fleet-heartbeat",
-   "target_id": "srv-olympus-pve",
-   "relation": "monitors",
-   "origin": "live"
-  },
-  {
-   "source_id": "cron-nightly-backup",
-   "target_id": "lxc-209-nextcloud",
-   "relation": "monitors",
-   "origin": "live"
-  },
-  {
-   "source_id": "svc-litellm-proxy",
-   "target_id": "lxc-201-litellm",
-   "relation": "depends_on",
-   "origin": "doc"
-  }
- ],
- "incidents": [
-  {
-   "node_id": "svc-inject-portal",
-   "node_label": "inject-portal",
-   "status": "open",
-   "started_at": 1794118634.424381,
-   "failure_count": 3,
-   "trigger_error": "HTTP http://10.20.0.50:8087/ -> connection refused (3x consecutive)",
-   "root_cause_hint": "Parent srv-athena-ai is up; unit inject-portal.service is failed",
-   "heal_attempts": 0,
-   "last_heal_action": null,
-   "resolution_summary": null
-  },
-  {
-   "node_id": "lxc-201-litellm",
-   "node_label": "litellm-gateway",
-   "status": "resolved",
-   "started_at": 1794115074.424381,
-   "resolved_at": 1794115374.424381,
-   "failure_count": 2,
-   "trigger_error": "TCP 4000 failed: timed out",
-   "root_cause_hint": "Container was stopped during maintenance",
-   "heal_attempts": 1,
-   "last_heal_action": "systemctl restart litellm.service",
-   "resolution_summary": "Auto-healed via local playbook in 2841ms (verified UP)"
-  }
- ],
- "probe_history": [
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794112374.424381,
-   "status": "up",
-   "latency_ms": 9.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794112674.424381,
-   "status": "up",
-   "latency_ms": 10.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794112974.424381,
-   "status": "up",
-   "latency_ms": 11.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794113274.424381,
-   "status": "up",
-   "latency_ms": 12.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794113574.424381,
-   "status": "up",
-   "latency_ms": 13.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794113874.424381,
-   "status": "up",
-   "latency_ms": 9.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794114174.424381,
-   "status": "up",
-   "latency_ms": 10.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794114474.424381,
-   "status": "up",
-   "latency_ms": 11.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794114774.424381,
-   "status": "up",
-   "latency_ms": 12.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794115074.424381,
-   "status": "up",
-   "latency_ms": 13.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794115374.424381,
-   "status": "up",
-   "latency_ms": 9.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794115674.424381,
-   "status": "up",
-   "latency_ms": 10.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794115974.424381,
-   "status": "up",
-   "latency_ms": 11.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794116274.424381,
-   "status": "up",
-   "latency_ms": 12.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794116574.424381,
-   "status": "up",
-   "latency_ms": 13.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794116874.424381,
-   "status": "up",
-   "latency_ms": 9.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794117174.424381,
-   "status": "up",
-   "latency_ms": 10.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794117474.424381,
-   "status": "up",
-   "latency_ms": 11.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794117774.424381,
-   "status": "up",
-   "latency_ms": 12.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794118074.424381,
-   "status": "up",
-   "latency_ms": 13.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794118374.424381,
-   "status": "up",
-   "latency_ms": 9.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794118674.424381,
-   "status": "up",
-   "latency_ms": 10.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794118974.424381,
-   "status": "up",
-   "latency_ms": 11.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-litellm-proxy",
-   "ts": 1794119274.424381,
-   "status": "up",
-   "latency_ms": 12.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794112374.424381,
-   "status": "up",
-   "latency_ms": 3.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794112674.424381,
-   "status": "up",
-   "latency_ms": 3.7,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794112974.424381,
-   "status": "up",
-   "latency_ms": 4.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794113274.424381,
-   "status": "up",
-   "latency_ms": 4.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794113574.424381,
-   "status": "up",
-   "latency_ms": 4.9,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794113874.424381,
-   "status": "up",
-   "latency_ms": 3.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794114174.424381,
-   "status": "up",
-   "latency_ms": 3.7,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794114474.424381,
-   "status": "up",
-   "latency_ms": 4.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794114774.424381,
-   "status": "up",
-   "latency_ms": 4.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794115074.424381,
-   "status": "up",
-   "latency_ms": 4.9,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794115374.424381,
-   "status": "up",
-   "latency_ms": 3.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794115674.424381,
-   "status": "up",
-   "latency_ms": 3.7,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794115974.424381,
-   "status": "up",
-   "latency_ms": 4.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794116274.424381,
-   "status": "up",
-   "latency_ms": 4.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794116574.424381,
-   "status": "up",
-   "latency_ms": 4.9,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794116874.424381,
-   "status": "up",
-   "latency_ms": 3.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794117174.424381,
-   "status": "up",
-   "latency_ms": 3.7,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794117474.424381,
-   "status": "up",
-   "latency_ms": 4.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794117774.424381,
-   "status": "up",
-   "latency_ms": 4.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794118074.424381,
-   "status": "up",
-   "latency_ms": 4.9,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794118374.424381,
-   "status": "up",
-   "latency_ms": 3.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794118674.424381,
-   "status": "up",
-   "latency_ms": 3.7,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794118974.424381,
-   "status": "up",
-   "latency_ms": 4.1,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-llama-dashboard",
-   "ts": 1794119274.424381,
-   "status": "up",
-   "latency_ms": 4.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794112374.424381,
-   "status": "up",
-   "latency_ms": 7.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794112674.424381,
-   "status": "up",
-   "latency_ms": 8.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794112974.424381,
-   "status": "up",
-   "latency_ms": 8.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794113274.424381,
-   "status": "up",
-   "latency_ms": 9.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794113574.424381,
-   "status": "up",
-   "latency_ms": 10.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794113874.424381,
-   "status": "up",
-   "latency_ms": 7.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794114174.424381,
-   "status": "up",
-   "latency_ms": 8.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794114474.424381,
-   "status": "up",
-   "latency_ms": 8.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794114774.424381,
-   "status": "up",
-   "latency_ms": 9.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794115074.424381,
-   "status": "up",
-   "latency_ms": 10.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794115374.424381,
-   "status": "up",
-   "latency_ms": 7.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794115674.424381,
-   "status": "up",
-   "latency_ms": 8.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794115974.424381,
-   "status": "up",
-   "latency_ms": 8.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794116274.424381,
-   "status": "up",
-   "latency_ms": 9.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794116574.424381,
-   "status": "up",
-   "latency_ms": 10.4,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794116874.424381,
-   "status": "up",
-   "latency_ms": 7.2,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794117174.424381,
-   "status": "up",
-   "latency_ms": 8.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794117474.424381,
-   "status": "up",
-   "latency_ms": 8.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794117774.424381,
-   "status": "up",
-   "latency_ms": 9.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794118074.424381,
-   "status": "down",
-   "latency_ms": null,
-   "detail": "connection refused"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794118374.424381,
-   "status": "down",
-   "latency_ms": null,
-   "detail": "connection refused"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794118674.424381,
-   "status": "down",
-   "latency_ms": null,
-   "detail": "connection refused"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794118974.424381,
-   "status": "down",
-   "latency_ms": null,
-   "detail": "connection refused"
-  },
-  {
-   "node_id": "svc-inject-portal",
-   "ts": 1794119274.424381,
-   "status": "down",
-   "latency_ms": null,
-   "detail": "connection refused"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794112374.424381,
-   "status": "up",
-   "latency_ms": 2.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794112674.424381,
-   "status": "up",
-   "latency_ms": 2.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794112974.424381,
-   "status": "up",
-   "latency_ms": 3.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794113274.424381,
-   "status": "up",
-   "latency_ms": 3.3,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794113574.424381,
-   "status": "up",
-   "latency_ms": 3.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794113874.424381,
-   "status": "up",
-   "latency_ms": 2.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794114174.424381,
-   "status": "up",
-   "latency_ms": 2.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794114474.424381,
-   "status": "up",
-   "latency_ms": 3.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794114774.424381,
-   "status": "up",
-   "latency_ms": 3.3,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794115074.424381,
-   "status": "up",
-   "latency_ms": 3.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794115374.424381,
-   "status": "up",
-   "latency_ms": 2.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794115674.424381,
-   "status": "up",
-   "latency_ms": 2.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794115974.424381,
-   "status": "up",
-   "latency_ms": 3.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794116274.424381,
-   "status": "up",
-   "latency_ms": 3.3,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794116574.424381,
-   "status": "up",
-   "latency_ms": 3.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794116874.424381,
-   "status": "up",
-   "latency_ms": 2.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794117174.424381,
-   "status": "up",
-   "latency_ms": 2.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794117474.424381,
-   "status": "up",
-   "latency_ms": 3.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794117774.424381,
-   "status": "up",
-   "latency_ms": 3.3,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794118074.424381,
-   "status": "up",
-   "latency_ms": 3.6,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794118374.424381,
-   "status": "up",
-   "latency_ms": 2.5,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794118674.424381,
-   "status": "up",
-   "latency_ms": 2.8,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794118974.424381,
-   "status": "up",
-   "latency_ms": 3.0,
-   "detail": "ok"
-  },
-  {
-   "node_id": "srv-olympus-pve",
-   "ts": 1794119274.424381,
-   "status": "up",
-   "latency_ms": 3.3,
-   "detail": "ok"
-  }
- ]
+  "name": "DawgSec demo fleet",
+  "sanitized": true,
+  "generated_at": 1794119274.424381,
+  "nodes": [
+    {
+      "kind": "server",
+      "stratum": 1,
+      "parent_id": null,
+      "host_ip": "10.20.0.10",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "8006",
+        "22"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 3.1,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "srv-olympus-pve",
+      "label": "olympus-pve",
+      "doc_state": {
+        "id": "srv-olympus-pve",
+        "kind": "server",
+        "label": "olympus-pve",
+        "host_ip": "10.20.0.10",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8006",
+          "22"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.10",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8006",
+          "22"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "server",
+      "stratum": 1,
+      "parent_id": null,
+      "host_ip": "10.20.0.50",
+      "tailnet_ip": "100.64.0.50",
+      "vmid": null,
+      "ports": [
+        "22",
+        "8080"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": "Start llama-server through the Control API on :8081/api/start, never directly.",
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 1.8,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "srv-athena-ai",
+      "label": "athena-ai",
+      "doc_state": {
+        "id": "srv-athena-ai",
+        "kind": "server",
+        "label": "athena-ai",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": "100.64.0.50",
+        "vmid": null,
+        "ports": [
+          "22",
+          "8080"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": "100.64.0.50",
+        "vmid": null,
+        "ports": [
+          "22",
+          "8080"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "server",
+      "stratum": 1,
+      "parent_id": null,
+      "host_ip": "10.20.0.1",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "443",
+        "8080"
+      ],
+      "managed_by": "headscale",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 2.4,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "srv-bastion-gw",
+      "label": "bastion-gw",
+      "doc_state": {
+        "id": "srv-bastion-gw",
+        "kind": "server",
+        "label": "bastion-gw",
+        "host_ip": "10.20.0.1",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "443",
+          "8080"
+        ],
+        "managed_by": "headscale",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.1",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "443",
+          "8080"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "lxc",
+      "stratum": 2,
+      "parent_id": "srv-olympus-pve",
+      "host_ip": "10.20.0.212",
+      "tailnet_ip": null,
+      "vmid": 201,
+      "ports": [
+        "4000"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 2.9,
+      "uptime_24h_pct": 99.98,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "lxc-201-litellm",
+      "label": "litellm-gateway",
+      "doc_state": {
+        "id": "lxc-201-litellm",
+        "kind": "lxc",
+        "label": "litellm-gateway",
+        "host_ip": "10.20.0.212",
+        "tailnet_ip": null,
+        "vmid": 201,
+        "ports": [
+          "4000"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.212",
+        "tailnet_ip": null,
+        "vmid": 201,
+        "ports": [
+          "4000"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "lxc",
+      "stratum": 2,
+      "parent_id": "srv-olympus-pve",
+      "host_ip": "10.20.0.218",
+      "tailnet_ip": null,
+      "vmid": 218,
+      "ports": [
+        "443",
+        "55000"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "unregistered",
+      "drift_reasons": [
+        "Live LXC 218 (wazuh-siem) has no registry entry"
+      ],
+      "health_status": "up",
+      "latency_ms": 8.2,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "lxc-218-wazuh",
+      "label": "wazuh-siem",
+      "doc_state": {
+        "id": "lxc-218-wazuh",
+        "kind": "lxc",
+        "label": "wazuh-siem",
+        "host_ip": "10.20.0.218",
+        "tailnet_ip": null,
+        "vmid": 218,
+        "ports": [
+          "443",
+          "55000"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.218",
+        "tailnet_ip": null,
+        "vmid": 218,
+        "ports": [
+          "443",
+          "55000"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "vm",
+      "stratum": 2,
+      "parent_id": "srv-olympus-pve",
+      "host_ip": "10.20.1.104",
+      "tailnet_ip": null,
+      "vmid": 104,
+      "ports": [
+        "389",
+        "445"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 6.4,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "vm-104-blueteam-ad",
+      "label": "blueteam-ad",
+      "doc_state": {
+        "id": "vm-104-blueteam-ad",
+        "kind": "vm",
+        "label": "blueteam-ad",
+        "host_ip": "10.20.1.104",
+        "tailnet_ip": null,
+        "vmid": 104,
+        "ports": [
+          "389",
+          "445"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.1.104",
+        "tailnet_ip": null,
+        "vmid": 104,
+        "ports": [
+          "389",
+          "445"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "vm",
+      "stratum": 2,
+      "parent_id": "srv-olympus-pve",
+      "host_ip": "10.20.1.108",
+      "tailnet_ip": null,
+      "vmid": 108,
+      "ports": [
+        "8443"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 7.7,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "vm-108-scoring-engine",
+      "label": "scoring-engine",
+      "doc_state": {
+        "id": "vm-108-scoring-engine",
+        "kind": "vm",
+        "label": "scoring-engine",
+        "host_ip": "10.20.1.108",
+        "tailnet_ip": null,
+        "vmid": 108,
+        "ports": [
+          "8443"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.1.108",
+        "tailnet_ip": null,
+        "vmid": 108,
+        "ports": [
+          "8443"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "lxc",
+      "stratum": 2,
+      "parent_id": "srv-olympus-pve",
+      "host_ip": "10.20.0.205",
+      "tailnet_ip": null,
+      "vmid": 205,
+      "ports": [
+        "3000",
+        "22"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 5.1,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "lxc-205-forgejo",
+      "label": "forgejo",
+      "doc_state": {
+        "id": "lxc-205-forgejo",
+        "kind": "lxc",
+        "label": "forgejo",
+        "host_ip": "10.20.0.205",
+        "tailnet_ip": null,
+        "vmid": 205,
+        "ports": [
+          "3000",
+          "22"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.205",
+        "tailnet_ip": null,
+        "vmid": 205,
+        "ports": [
+          "3000",
+          "22"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "lxc",
+      "stratum": 2,
+      "parent_id": "srv-olympus-pve",
+      "host_ip": "10.20.0.209",
+      "tailnet_ip": null,
+      "vmid": 209,
+      "ports": [
+        "443"
+      ],
+      "managed_by": "proxmox",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 9.9,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "lxc-209-nextcloud",
+      "label": "nextcloud",
+      "doc_state": {
+        "id": "lxc-209-nextcloud",
+        "kind": "lxc",
+        "label": "nextcloud",
+        "host_ip": "10.20.0.209",
+        "tailnet_ip": null,
+        "vmid": 209,
+        "ports": [
+          "443"
+        ],
+        "managed_by": "proxmox",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.209",
+        "tailnet_ip": null,
+        "vmid": 209,
+        "ports": [
+          "443"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "service",
+      "stratum": 3,
+      "parent_id": "lxc-201-litellm",
+      "host_ip": "10.20.0.212",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "4000"
+      ],
+      "managed_by": "systemd-system",
+      "systemd_unit": "litellm.service",
+      "project_path": null,
+      "registry_path": "services/litellm.md",
+      "pitfalls_summary": "Dial 10.20.0.212:4000 directly; the old 10.20.0.50 front was removed.",
+      "recovery_cmd": "systemctl restart litellm.service",
+      "auto_heal_policy": "auto",
+      "drift_status": "changed",
+      "drift_reasons": [
+        "host_ip: registry says 10.20.0.50, live is 10.20.0.212",
+        "ports: registry says 4000 on 10.20.0.50, live listens on 10.20.0.212:4000"
+      ],
+      "health_status": "up",
+      "latency_ms": 11.4,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "svc-litellm-proxy",
+      "label": "LiteLLM proxy",
+      "probe": "http://10.20.0.212:4000/health/liveliness",
+      "doc_state": {
+        "id": "svc-litellm-proxy",
+        "kind": "service",
+        "label": "LiteLLM proxy",
+        "host_ip": "10.20.0.212",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "4000"
+        ],
+        "managed_by": "systemd-system",
+        "systemd_unit": "litellm.service",
+        "recovery_cmd": "systemctl restart litellm.service"
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.212",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "4000"
+        ],
+        "systemd_unit": "litellm.service"
+      }
+    },
+    {
+      "kind": "service",
+      "stratum": 3,
+      "parent_id": "srv-athena-ai",
+      "host_ip": "10.20.0.50",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "8081"
+      ],
+      "managed_by": "systemd-user",
+      "systemd_unit": "llama-dashboard.service",
+      "project_path": null,
+      "registry_path": "services/llama-dashboard.md",
+      "pitfalls_summary": "llama-server is started and stopped through Control on :8081, never from a shell.",
+      "recovery_cmd": "systemctl --user restart llama-dashboard.service",
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 4.2,
+      "uptime_24h_pct": 99.91,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "svc-llama-dashboard",
+      "label": "llama-dashboard",
+      "probe": "http://10.20.0.50:8081/api/status",
+      "doc_state": {
+        "id": "svc-llama-dashboard",
+        "kind": "service",
+        "label": "llama-dashboard",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8081"
+        ],
+        "managed_by": "systemd-user",
+        "systemd_unit": "llama-dashboard.service",
+        "recovery_cmd": "systemctl --user restart llama-dashboard.service"
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8081"
+        ],
+        "systemd_unit": "llama-dashboard.service"
+      }
+    },
+    {
+      "kind": "service",
+      "stratum": 3,
+      "parent_id": "lxc-218-wazuh",
+      "host_ip": "10.20.0.218",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "443",
+        "55000"
+      ],
+      "managed_by": "docker-compose",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "notify_only",
+      "drift_status": "unregistered",
+      "drift_reasons": [
+        "Discovered live on 10.20.0.218:443 with no registry entry"
+      ],
+      "health_status": "up",
+      "latency_ms": 42.0,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "svc-wazuh-siem",
+      "label": "Wazuh SIEM",
+      "probe": "https://10.20.0.218/",
+      "doc_state": {
+        "id": "svc-wazuh-siem",
+        "kind": "service",
+        "label": "Wazuh SIEM",
+        "host_ip": "10.20.0.218",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "443",
+          "55000"
+        ],
+        "managed_by": "docker-compose",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.218",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "443",
+          "55000"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "service",
+      "stratum": 3,
+      "parent_id": "srv-athena-ai",
+      "host_ip": "10.20.0.50",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "8087"
+      ],
+      "managed_by": "systemd-user",
+      "systemd_unit": "inject-portal.service",
+      "project_path": null,
+      "registry_path": "services/inject-portal.md",
+      "pitfalls_summary": "Bound to 127.0.0.1 only; probing the tailnet address always fails.",
+      "recovery_cmd": "systemctl --user restart inject-portal.service",
+      "auto_heal_policy": "auto",
+      "drift_status": "stale",
+      "drift_reasons": [
+        "Registry says active on :8087; probe has failed 3x (connection refused)"
+      ],
+      "health_status": "down",
+      "latency_ms": null,
+      "uptime_24h_pct": 87.4,
+      "failure_streak": 3,
+      "last_seen_live_at": 1794118634.424381,
+      "id": "svc-inject-portal",
+      "label": "inject-portal",
+      "probe": "http://10.20.0.50:8087/",
+      "doc_state": {
+        "id": "svc-inject-portal",
+        "kind": "service",
+        "label": "inject-portal",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8087"
+        ],
+        "managed_by": "systemd-user",
+        "systemd_unit": "inject-portal.service",
+        "recovery_cmd": "systemctl --user restart inject-portal.service"
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8087"
+        ],
+        "systemd_unit": "inject-portal.service"
+      }
+    },
+    {
+      "kind": "service",
+      "stratum": 3,
+      "parent_id": "srv-bastion-gw",
+      "host_ip": "10.20.0.1",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "8080"
+      ],
+      "managed_by": "systemd-system",
+      "systemd_unit": "headscale.service",
+      "project_path": null,
+      "registry_path": "services/headscale.md",
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 3.3,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "svc-headscale",
+      "label": "Headscale",
+      "probe": "http://10.20.0.1:8080/health",
+      "doc_state": {
+        "id": "svc-headscale",
+        "kind": "service",
+        "label": "Headscale",
+        "host_ip": "10.20.0.1",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8080"
+        ],
+        "managed_by": "systemd-system",
+        "systemd_unit": "headscale.service",
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.1",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8080"
+        ],
+        "systemd_unit": "headscale.service"
+      }
+    },
+    {
+      "kind": "service",
+      "stratum": 3,
+      "parent_id": "lxc-205-forgejo",
+      "host_ip": "10.20.0.205",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "3000"
+      ],
+      "managed_by": "docker-compose",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": "services/forgejo.md",
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "playbook_only",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 6.8,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "svc-forgejo",
+      "label": "Forgejo",
+      "probe": "http://10.20.0.205:3000/api/healthz",
+      "doc_state": {
+        "id": "svc-forgejo",
+        "kind": "service",
+        "label": "Forgejo",
+        "host_ip": "10.20.0.205",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "3000"
+        ],
+        "managed_by": "docker-compose",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.205",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "3000"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "service",
+      "stratum": 3,
+      "parent_id": "vm-108-scoring-engine",
+      "host_ip": "10.20.1.108",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "8443"
+      ],
+      "managed_by": "docker-compose",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": "services/quotient.md",
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 18.5,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "svc-quotient-scoring",
+      "label": "Quotient scoring",
+      "probe": "https://10.20.1.108:8443/health",
+      "doc_state": {
+        "id": "svc-quotient-scoring",
+        "kind": "service",
+        "label": "Quotient scoring",
+        "host_ip": "10.20.1.108",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8443"
+        ],
+        "managed_by": "docker-compose",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.1.108",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8443"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "project",
+      "stratum": 3,
+      "parent_id": "srv-athena-ai",
+      "host_ip": null,
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [],
+      "managed_by": "git",
+      "systemd_unit": null,
+      "project_path": "/srv/range-automation",
+      "registry_path": "projects/range-automation.md",
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "doc_only",
+      "drift_reasons": [],
+      "health_status": "unknown",
+      "latency_ms": null,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "proj-range-automation",
+      "label": "range-automation",
+      "doc_state": {
+        "id": "proj-range-automation",
+        "kind": "project",
+        "label": "range-automation",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "managed_by": "git",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "agent",
+      "stratum": 4,
+      "parent_id": null,
+      "host_ip": null,
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [],
+      "managed_by": "hermes",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": "services/hermes-gateway.md",
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 1.1,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "agent-hermes-ops",
+      "label": "Hermes (ops)",
+      "live_state": {
+        "source": "fixture",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "systemd_unit": null
+      },
+      "doc_state": {
+        "id": "agent-hermes-ops",
+        "kind": "agent",
+        "label": "Hermes (ops)",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "managed_by": "hermes",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      }
+    },
+    {
+      "kind": "model_endpoint",
+      "stratum": 4,
+      "parent_id": null,
+      "host_ip": "10.20.0.50",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "8080"
+      ],
+      "managed_by": "hermes-config",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 21.0,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "model-qwen-local",
+      "label": "Local vLLM (B70)",
+      "probe": "http://10.20.0.50:8080/v1/models",
+      "doc_state": {
+        "id": "model-qwen-local",
+        "kind": "model_endpoint",
+        "label": "Local vLLM (B70)",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8080"
+        ],
+        "managed_by": "hermes-config",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.50",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "8080"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "model_endpoint",
+      "stratum": 4,
+      "parent_id": null,
+      "host_ip": "10.20.0.212",
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [
+        "4000"
+      ],
+      "managed_by": "hermes-config",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": 12.6,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "model-litellm-pool",
+      "label": "LiteLLM pool",
+      "probe": "http://10.20.0.212:4000/v1/models",
+      "doc_state": {
+        "id": "model-litellm-pool",
+        "kind": "model_endpoint",
+        "label": "LiteLLM pool",
+        "host_ip": "10.20.0.212",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "4000"
+        ],
+        "managed_by": "hermes-config",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      },
+      "live_state": {
+        "source": "fixture",
+        "host_ip": "10.20.0.212",
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [
+          "4000"
+        ],
+        "systemd_unit": null
+      }
+    },
+    {
+      "kind": "cron",
+      "stratum": 4,
+      "parent_id": "agent-hermes-ops",
+      "host_ip": null,
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [],
+      "managed_by": "hermes-cron",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "matched",
+      "drift_reasons": [],
+      "health_status": "up",
+      "latency_ms": null,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "cron-fleet-heartbeat",
+      "label": "cron: fleet-heartbeat",
+      "live_state": {
+        "source": "fixture",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "systemd_unit": null
+      },
+      "doc_state": {
+        "id": "cron-fleet-heartbeat",
+        "kind": "cron",
+        "label": "cron: fleet-heartbeat",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "managed_by": "hermes-cron",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      }
+    },
+    {
+      "kind": "cron",
+      "stratum": 4,
+      "parent_id": "agent-hermes-ops",
+      "host_ip": null,
+      "tailnet_ip": null,
+      "vmid": null,
+      "ports": [],
+      "managed_by": "hermes-cron",
+      "systemd_unit": null,
+      "project_path": null,
+      "registry_path": null,
+      "pitfalls_summary": null,
+      "recovery_cmd": null,
+      "auto_heal_policy": "auto",
+      "drift_status": "changed",
+      "drift_reasons": [
+        "stale: last ran 38h ago (every 24h)"
+      ],
+      "health_status": "degraded",
+      "latency_ms": null,
+      "uptime_24h_pct": 100.0,
+      "failure_streak": 0,
+      "last_seen_live_at": 1794119274.424381,
+      "id": "cron-nightly-backup",
+      "label": "cron: nightly-backup",
+      "live_state": {
+        "source": "fixture",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "systemd_unit": null
+      },
+      "doc_state": {
+        "id": "cron-nightly-backup",
+        "kind": "cron",
+        "label": "cron: nightly-backup",
+        "host_ip": null,
+        "tailnet_ip": null,
+        "vmid": null,
+        "ports": [],
+        "managed_by": "hermes-cron",
+        "systemd_unit": null,
+        "recovery_cmd": null
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "srv-olympus-pve",
+      "target_id": "lxc-201-litellm",
+      "relation": "hosts",
+      "origin": "live"
+    },
+    {
+      "source_id": "srv-olympus-pve",
+      "target_id": "lxc-218-wazuh",
+      "relation": "hosts",
+      "origin": "live"
+    },
+    {
+      "source_id": "srv-olympus-pve",
+      "target_id": "vm-104-blueteam-ad",
+      "relation": "hosts",
+      "origin": "live"
+    },
+    {
+      "source_id": "srv-olympus-pve",
+      "target_id": "vm-108-scoring-engine",
+      "relation": "hosts",
+      "origin": "live"
+    },
+    {
+      "source_id": "srv-olympus-pve",
+      "target_id": "lxc-205-forgejo",
+      "relation": "hosts",
+      "origin": "live"
+    },
+    {
+      "source_id": "srv-olympus-pve",
+      "target_id": "lxc-209-nextcloud",
+      "relation": "hosts",
+      "origin": "live"
+    },
+    {
+      "source_id": "lxc-201-litellm",
+      "target_id": "svc-litellm-proxy",
+      "relation": "hosts",
+      "origin": "both"
+    },
+    {
+      "source_id": "srv-athena-ai",
+      "target_id": "svc-llama-dashboard",
+      "relation": "hosts",
+      "origin": "both"
+    },
+    {
+      "source_id": "srv-athena-ai",
+      "target_id": "svc-inject-portal",
+      "relation": "hosts",
+      "origin": "both"
+    },
+    {
+      "source_id": "lxc-218-wazuh",
+      "target_id": "svc-wazuh-siem",
+      "relation": "hosts",
+      "origin": "live"
+    },
+    {
+      "source_id": "srv-bastion-gw",
+      "target_id": "svc-headscale",
+      "relation": "hosts",
+      "origin": "both"
+    },
+    {
+      "source_id": "lxc-205-forgejo",
+      "target_id": "svc-forgejo",
+      "relation": "hosts",
+      "origin": "both"
+    },
+    {
+      "source_id": "vm-108-scoring-engine",
+      "target_id": "svc-quotient-scoring",
+      "relation": "hosts",
+      "origin": "both"
+    },
+    {
+      "source_id": "agent-hermes-ops",
+      "target_id": "model-qwen-local",
+      "relation": "uses_model",
+      "origin": "live"
+    },
+    {
+      "source_id": "agent-hermes-ops",
+      "target_id": "model-litellm-pool",
+      "relation": "uses_model",
+      "origin": "live"
+    },
+    {
+      "source_id": "cron-fleet-heartbeat",
+      "target_id": "srv-olympus-pve",
+      "relation": "monitors",
+      "origin": "live"
+    },
+    {
+      "source_id": "cron-nightly-backup",
+      "target_id": "lxc-209-nextcloud",
+      "relation": "monitors",
+      "origin": "live"
+    },
+    {
+      "source_id": "svc-litellm-proxy",
+      "target_id": "lxc-201-litellm",
+      "relation": "depends_on",
+      "origin": "doc"
+    }
+  ],
+  "incidents": [
+    {
+      "node_id": "svc-inject-portal",
+      "node_label": "inject-portal",
+      "status": "open",
+      "started_at": 1794118634.424381,
+      "failure_count": 3,
+      "trigger_error": "HTTP http://10.20.0.50:8087/ -> connection refused (3x consecutive)",
+      "root_cause_hint": "Parent srv-athena-ai is up; unit inject-portal.service is failed",
+      "heal_attempts": 0,
+      "last_heal_action": null,
+      "resolution_summary": null,
+      "id": 1
+    },
+    {
+      "node_id": "lxc-201-litellm",
+      "node_label": "litellm-gateway",
+      "status": "resolved",
+      "started_at": 1794115074.424381,
+      "resolved_at": 1794115374.424381,
+      "failure_count": 2,
+      "trigger_error": "TCP 4000 failed: timed out",
+      "root_cause_hint": "Container was stopped during maintenance",
+      "heal_attempts": 1,
+      "last_heal_action": "systemctl restart litellm.service",
+      "resolution_summary": "Auto-healed via local playbook in 2841ms (verified UP)",
+      "id": 2
+    }
+  ],
+  "probe_history": [
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794112374.424381,
+      "status": "up",
+      "latency_ms": 9.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794112674.424381,
+      "status": "up",
+      "latency_ms": 10.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794112974.424381,
+      "status": "up",
+      "latency_ms": 11.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794113274.424381,
+      "status": "up",
+      "latency_ms": 12.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794113574.424381,
+      "status": "up",
+      "latency_ms": 13.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794113874.424381,
+      "status": "up",
+      "latency_ms": 9.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794114174.424381,
+      "status": "up",
+      "latency_ms": 10.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794114474.424381,
+      "status": "up",
+      "latency_ms": 11.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794114774.424381,
+      "status": "up",
+      "latency_ms": 12.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794115074.424381,
+      "status": "up",
+      "latency_ms": 13.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794115374.424381,
+      "status": "up",
+      "latency_ms": 9.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794115674.424381,
+      "status": "up",
+      "latency_ms": 10.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794115974.424381,
+      "status": "up",
+      "latency_ms": 11.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794116274.424381,
+      "status": "up",
+      "latency_ms": 12.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794116574.424381,
+      "status": "up",
+      "latency_ms": 13.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794116874.424381,
+      "status": "up",
+      "latency_ms": 9.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794117174.424381,
+      "status": "up",
+      "latency_ms": 10.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794117474.424381,
+      "status": "up",
+      "latency_ms": 11.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794117774.424381,
+      "status": "up",
+      "latency_ms": 12.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794118074.424381,
+      "status": "up",
+      "latency_ms": 13.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794118374.424381,
+      "status": "up",
+      "latency_ms": 9.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794118674.424381,
+      "status": "up",
+      "latency_ms": 10.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794118974.424381,
+      "status": "up",
+      "latency_ms": 11.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-litellm-proxy",
+      "ts": 1794119274.424381,
+      "status": "up",
+      "latency_ms": 12.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794112374.424381,
+      "status": "up",
+      "latency_ms": 3.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794112674.424381,
+      "status": "up",
+      "latency_ms": 3.7,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794112974.424381,
+      "status": "up",
+      "latency_ms": 4.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794113274.424381,
+      "status": "up",
+      "latency_ms": 4.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794113574.424381,
+      "status": "up",
+      "latency_ms": 4.9,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794113874.424381,
+      "status": "up",
+      "latency_ms": 3.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794114174.424381,
+      "status": "up",
+      "latency_ms": 3.7,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794114474.424381,
+      "status": "up",
+      "latency_ms": 4.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794114774.424381,
+      "status": "up",
+      "latency_ms": 4.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794115074.424381,
+      "status": "up",
+      "latency_ms": 4.9,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794115374.424381,
+      "status": "up",
+      "latency_ms": 3.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794115674.424381,
+      "status": "up",
+      "latency_ms": 3.7,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794115974.424381,
+      "status": "up",
+      "latency_ms": 4.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794116274.424381,
+      "status": "up",
+      "latency_ms": 4.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794116574.424381,
+      "status": "up",
+      "latency_ms": 4.9,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794116874.424381,
+      "status": "up",
+      "latency_ms": 3.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794117174.424381,
+      "status": "up",
+      "latency_ms": 3.7,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794117474.424381,
+      "status": "up",
+      "latency_ms": 4.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794117774.424381,
+      "status": "up",
+      "latency_ms": 4.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794118074.424381,
+      "status": "up",
+      "latency_ms": 4.9,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794118374.424381,
+      "status": "up",
+      "latency_ms": 3.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794118674.424381,
+      "status": "up",
+      "latency_ms": 3.7,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794118974.424381,
+      "status": "up",
+      "latency_ms": 4.1,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-llama-dashboard",
+      "ts": 1794119274.424381,
+      "status": "up",
+      "latency_ms": 4.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794112374.424381,
+      "status": "up",
+      "latency_ms": 7.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794112674.424381,
+      "status": "up",
+      "latency_ms": 8.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794112974.424381,
+      "status": "up",
+      "latency_ms": 8.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794113274.424381,
+      "status": "up",
+      "latency_ms": 9.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794113574.424381,
+      "status": "up",
+      "latency_ms": 10.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794113874.424381,
+      "status": "up",
+      "latency_ms": 7.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794114174.424381,
+      "status": "up",
+      "latency_ms": 8.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794114474.424381,
+      "status": "up",
+      "latency_ms": 8.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794114774.424381,
+      "status": "up",
+      "latency_ms": 9.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794115074.424381,
+      "status": "up",
+      "latency_ms": 10.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794115374.424381,
+      "status": "up",
+      "latency_ms": 7.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794115674.424381,
+      "status": "up",
+      "latency_ms": 8.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794115974.424381,
+      "status": "up",
+      "latency_ms": 8.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794116274.424381,
+      "status": "up",
+      "latency_ms": 9.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794116574.424381,
+      "status": "up",
+      "latency_ms": 10.4,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794116874.424381,
+      "status": "up",
+      "latency_ms": 7.2,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794117174.424381,
+      "status": "up",
+      "latency_ms": 8.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794117474.424381,
+      "status": "up",
+      "latency_ms": 8.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794117774.424381,
+      "status": "up",
+      "latency_ms": 9.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794118074.424381,
+      "status": "down",
+      "latency_ms": null,
+      "detail": "connection refused"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794118374.424381,
+      "status": "down",
+      "latency_ms": null,
+      "detail": "connection refused"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794118674.424381,
+      "status": "down",
+      "latency_ms": null,
+      "detail": "connection refused"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794118974.424381,
+      "status": "down",
+      "latency_ms": null,
+      "detail": "connection refused"
+    },
+    {
+      "node_id": "svc-inject-portal",
+      "ts": 1794119274.424381,
+      "status": "down",
+      "latency_ms": null,
+      "detail": "connection refused"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794112374.424381,
+      "status": "up",
+      "latency_ms": 2.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794112674.424381,
+      "status": "up",
+      "latency_ms": 2.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794112974.424381,
+      "status": "up",
+      "latency_ms": 3.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794113274.424381,
+      "status": "up",
+      "latency_ms": 3.3,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794113574.424381,
+      "status": "up",
+      "latency_ms": 3.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794113874.424381,
+      "status": "up",
+      "latency_ms": 2.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794114174.424381,
+      "status": "up",
+      "latency_ms": 2.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794114474.424381,
+      "status": "up",
+      "latency_ms": 3.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794114774.424381,
+      "status": "up",
+      "latency_ms": 3.3,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794115074.424381,
+      "status": "up",
+      "latency_ms": 3.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794115374.424381,
+      "status": "up",
+      "latency_ms": 2.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794115674.424381,
+      "status": "up",
+      "latency_ms": 2.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794115974.424381,
+      "status": "up",
+      "latency_ms": 3.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794116274.424381,
+      "status": "up",
+      "latency_ms": 3.3,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794116574.424381,
+      "status": "up",
+      "latency_ms": 3.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794116874.424381,
+      "status": "up",
+      "latency_ms": 2.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794117174.424381,
+      "status": "up",
+      "latency_ms": 2.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794117474.424381,
+      "status": "up",
+      "latency_ms": 3.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794117774.424381,
+      "status": "up",
+      "latency_ms": 3.3,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794118074.424381,
+      "status": "up",
+      "latency_ms": 3.6,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794118374.424381,
+      "status": "up",
+      "latency_ms": 2.5,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794118674.424381,
+      "status": "up",
+      "latency_ms": 2.8,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794118974.424381,
+      "status": "up",
+      "latency_ms": 3.0,
+      "detail": "ok"
+    },
+    {
+      "node_id": "srv-olympus-pve",
+      "ts": 1794119274.424381,
+      "status": "up",
+      "latency_ms": 3.3,
+      "detail": "ok"
+    }
+  ]
 }

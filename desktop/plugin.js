@@ -45,6 +45,15 @@ const DRIFT_COLOR = {
   observed: 'var(--ui-text-tertiary, #8b8f98)',
   doc_only: 'var(--ui-text-quaternary, #6b7280)'
 }
+// drift statuses roll up into three view groups the UI filters by
+const DRIFT_GROUP = {
+  matched: 'matched',
+  changed: 'attention',
+  unregistered: 'attention',
+  stale: 'attention',
+  observed: 'other',
+  doc_only: 'other'
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const rest = (path, options) => {
@@ -957,15 +966,25 @@ function InfraAtlasPage() {
   const counts = (data && data.counts) || {}
   const incidents = (data && data.incidents) || []
   const config = (data && data.config) || {}
+  const lastSweep = (data && data.last_sweep) || null
+
+  const attentionCount = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
+  const otherCount = (counts.observed || 0) + (counts.doc_only || 0)
 
   const visible = nodes.filter(node => {
-    if (filter !== 'all' && node.drift_status !== filter) return false
+    if (filter !== 'all' && DRIFT_GROUP[node.drift_status] !== filter) return false
     if (!search.trim()) return true
     const needle = search.trim().toLowerCase()
     return [node.id, node.label, node.host_ip, node.tailnet_ip, node.systemd_unit, (node.ports || []).join(' ')]
       .filter(Boolean)
       .some(value => String(value).toLowerCase().includes(needle))
   })
+
+  // from the fleet panel / rail: jump to a view, optionally pin a node open
+  const focusFleet = (key, nodeId) => {
+    setFilter(key)
+    if (nodeId) setSelectedId(nodeId)
+  }
 
   const selected = visible.find(node => node.id === selectedId) || nodes.find(node => node.id === selectedId) || null
 
@@ -1023,25 +1042,6 @@ function InfraAtlasPage() {
             ]
           }),
           jsxs('div', {
-            className: 'ia-pills',
-            children: [
-              pill('all', `All (${counts.total || 0})`, filter, setFilter),
-              pill('matched', `Matched (${counts.matched || 0})`, filter, setFilter, DRIFT_COLOR.matched),
-              pill('changed', `Changed (${counts.changed || 0})`, filter, setFilter, DRIFT_COLOR.changed),
-              pill('unregistered', `Unregistered (${counts.unregistered || 0})`, filter, setFilter, DRIFT_COLOR.unregistered),
-              pill('stale', `Stale (${counts.stale || 0})`, filter, setFilter, DRIFT_COLOR.stale),
-              counts.observed
-                ? pill('observed', `Peers (${counts.observed})`, filter, setFilter, DRIFT_COLOR.observed)
-                : null,
-              incidents.length
-                ? jsx('span', {
-                    className: 'ia-pill ia-pill-incident',
-                    children: `Incidents (${incidents.length})`
-                  })
-                : null
-            ]
-          }),
-          jsxs('div', {
             className: 'ia-controls',
             children: [
               jsx('input', {
@@ -1074,24 +1074,48 @@ function InfraAtlasPage() {
         ]
       }),
 
+      jsxs('div', {
+        className: 'ia-rail',
+        children: [
+          jsx('span', { className: 'ia-rail-label', children: 'View' }),
+          pill('all', `All ${counts.total || 0}`, filter, setFilter),
+          pill('matched', `Matched ${counts.matched || 0}`, filter, setFilter, '#34d399'),
+          pill('attention', `Attention ${attentionCount}`, filter, setFilter, '#fbbf24'),
+          pill('other', `Docs & peers ${otherCount}`, filter, setFilter, '#9fb0cc'),
+          jsx('span', { className: 'ia-rail-spacer' }),
+          jsx('span', {
+            className: 'ia-rail-info',
+            children: `${counts.total || 0} nodes · last sweep ${ago(lastSweep && lastSweep.finished_at)}`
+          })
+        ]
+      }),
+
       incidents.length ? IncidentStrip({ incidents, onHeal: nodeId => healNode(nodeId, setBusy, refetch) }) : null,
 
       jsxs('div', {
         className: 'ia-body',
         children: [
-          jsx('div', {
+          jsxs('div', {
             className: 'ia-canvas',
-            children: error
-              ? jsx('div', { className: 'ia-empty', children: `Could not load the graph: ${error.message || error}` })
-              : isLoading && !nodes.length
-                ? jsx('div', { className: 'ia-empty', children: 'Loading infrastructure graph…' })
-                : nodes.length
-                  ? jsx(Topology, { nodes: visible, edges, selectedId, onSelect: setSelectedId, pulseFor: nodePulse })
-                  : jsx('div', {
-                      className: 'ia-empty',
-                      children:
-                        'No nodes yet. Run a sweep, or switch on the demo fleet to see the graph populated with a sanitized fleet.'
-                    })
+            children: [
+              error
+                ? jsx('div', { className: 'ia-empty', children: `Could not load the graph: ${error.message || error}` })
+                : isLoading && !nodes.length
+                  ? jsx('div', { className: 'ia-empty', children: 'Loading infrastructure graph…' })
+                  : nodes.length
+                    ? visible.length
+                      ? jsx(Topology, { nodes: visible, edges, selectedId, onSelect: setSelectedId, pulseFor: nodePulse })
+                      : jsx('div', {
+                          className: 'ia-empty',
+                          children: 'Nothing matches this view — pick another category above or clear the search to see the whole fleet.'
+                        })
+                    : jsx('div', {
+                        className: 'ia-empty',
+                        children:
+                          'No nodes yet. Run a sweep, or switch on the demo fleet to see the graph populated with a sanitized fleet.'
+                      }),
+              nodes.length && !error ? jsx(Legend, {}) : null
+            ]
           }),
           jsx(Inspector, {
             node: selected,
@@ -1099,7 +1123,11 @@ function InfraAtlasPage() {
             onClose: () => setSelectedId(null),
             onRefetch: refetch,
             setBusy,
-            guardrail: config.guardrail_mode
+            guardrail: config.guardrail_mode,
+            counts,
+            fleetIncidents: incidents,
+            lastSweep,
+            onFocus: focusFleet
           })
         ]
       }),
@@ -1113,7 +1141,7 @@ function pill(key, label, active, setActive, color) {
   return jsx('button', {
     type: 'button',
     className: cn('ia-pill', active === key && 'ia-pill-active'),
-    style: color ? { borderColor: active === key ? color : 'transparent' } : undefined,
+    style: color && active === key ? { color, boxShadow: `inset 0 0 0 1px ${color}` } : undefined,
     onClick: () => setActive(active === key ? 'all' : key),
     children: label
   })
@@ -1296,10 +1324,11 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
       jsxs('div', {
         className: 'ia-zoom',
         children: [
-          jsx('button', { type: 'button', onClick: () => setZoom(z => Math.min(2.4, z * 1.2)), children: '+' }),
-          jsx('button', { type: 'button', onClick: () => setZoom(z => Math.max(0.42, z / 1.2)), children: '−' }),
+          jsx('button', { type: 'button', title: 'Zoom in', onClick: () => setZoom(z => Math.min(2.4, z * 1.2)), children: '+' }),
+          jsx('button', { type: 'button', title: 'Zoom out', onClick: () => setZoom(z => Math.max(0.42, z / 1.2)), children: '−' }),
           jsx('button', {
             type: 'button',
+            title: 'Reset view',
             onClick: () => {
               setZoom(1)
               setOffset({ x: 0, y: 0 })
@@ -1423,7 +1452,161 @@ async function healNode(nodeId, setBusy, refetch) {
 }
 
 // ── inspector ──────────────────────────────────────────────────────────────
-function Inspector({ node, busy, onClose, onRefetch, setBusy, guardrail }) {
+// Idle state: a fleet panel — status breakdown, open incidents and a hint —
+// so the rail always carries real information instead of dead space.
+function FleetPanel({ counts, incidents, lastSweep, onFocus }) {
+  const attention = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
+  const rows = [
+    ['matched', 'Matched', counts.matched || 0, '#34d399'],
+    ['attention', 'Needs attention', attention, '#fbbf24'],
+    ['other', 'Docs & peers', (counts.observed || 0) + (counts.doc_only || 0), '#9fb0cc']
+  ]
+  return jsxs(Fragment, { children: [
+    jsxs('div', { className: 'ia-fleet-grid', children: rows.map(([key, label, n, color]) =>
+      jsxs('button', {
+        type: 'button',
+        className: cn('ia-fleet-cell', !n && 'ia-fleet-zero'),
+        onClick: () => onFocus(key),
+        children: [
+          jsxs('div', { className: 'ia-fleet-num', children: [
+            jsx('span', { className: 'ia-fleet-diamond', style: { background: color } }),
+            String(n)
+          ] }),
+          jsx('div', { className: 'ia-fleet-label', children: label })
+        ]
+      }, key))
+    }),
+    incidents.length
+      ? jsxs('div', { className: 'ia-block', children: [
+          jsx('div', { className: 'ia-block-title', children: 'Open incidents' }),
+          jsx('ul', { className: 'ia-list', children: incidents.map(incident =>
+            jsx('li', {
+              children: jsxs('button', {
+                type: 'button',
+                className: 'ia-inc-item',
+                onClick: () => onFocus('attention', incident.node_id),
+                children: [
+                  jsxs('span', { className: 'ia-inc-head', children: [
+                    `#${incident.id} ${incident.node_label || incident.node_id}`,
+                    jsx('span', { className: 'ia-incident-state', children: incident.status })
+                  ] }),
+                  jsx('span', { className: 'ia-inc-detail', children: incident.trigger_error || '' })
+                ]
+              })
+            }, `fleet-inc-${incident.id}`))
+          })
+        ] })
+      : null,
+    lastSweep
+      ? jsx('div', { className: 'ia-kv', children: kv('last sweep', ago(lastSweep.finished_at)) })
+      : null,
+    jsx('div', { className: 'ia-muted', children: 'Select a shape on the map — or a category above — to inspect registry state, live diff and recovery playbooks.' })
+  ] })
+}
+
+// flat pictograms mirroring the diorama shapes, for the legend
+function LegendGlyph({ kind }) {
+  const scene = kindScene(kind)
+  const c = scene.accent
+  const m = scene.mat
+  const common = { fill: m, stroke: c, strokeWidth: 1 }
+  let inner
+  switch (scene.shape) {
+    case 'rack':
+      inner = [
+        jsx('rect', { x: 4, y: 1, width: 10, height: 12, ...common }),
+        jsx('path', { d: 'M 6 4 H 12 M 6 7 H 12 M 6 10 H 12', stroke: c, strokeWidth: 1, fill: 'none', opacity: .8 })
+      ]
+      break
+    case 'tower':
+      inner = [jsx('rect', { x: 6, y: 1, width: 6, height: 12, ...common }), jsx('path', { d: 'M 7.5 4 H 10.5', stroke: c, fill: 'none' })]
+      break
+    case 'tank':
+      inner = [
+        jsx('rect', { x: 5, y: 3, width: 8, height: 9, ...common }),
+        jsx('ellipse', { cx: 9, cy: 3, rx: 4, ry: 1.6, fill: 'none', stroke: c })
+      ]
+      break
+    case 'cargo':
+      inner = [
+        jsx('rect', { x: 1, y: 4, width: 16, height: 7, ...common }),
+        jsx('path', { d: 'M 4.5 4 V 11 M 7.5 4 V 11 M 10.5 4 V 11 M 13.5 4 V 11', stroke: c, strokeWidth: .8, fill: 'none', opacity: .7 })
+      ]
+      break
+    case 'plate':
+      inner = jsx('rect', { x: 2, y: 5, width: 14, height: 5, ...common })
+      break
+    case 'bot':
+      inner = [
+        jsx('rect', { x: 6, y: 5, width: 6, height: 7, ...common }),
+        jsx('path', { d: 'M 9 5 V 2', stroke: c, fill: 'none' }),
+        jsx('circle', { cx: 9, cy: 1.5, r: 1, fill: c })
+      ]
+      break
+    case 'orb':
+      inner = [
+        jsx('circle', { cx: 9, cy: 7, r: 3.2, fill: c }),
+        jsx('ellipse', { cx: 9, cy: 7, rx: 6.5, ry: 2.2, fill: 'none', stroke: c, opacity: .55 })
+      ]
+      break
+    case 'clock':
+      inner = [
+        jsx('circle', { cx: 9, cy: 7, r: 4.6, fill: '#141d2c', stroke: c }),
+        jsx('path', { d: 'M 9 7 V 3.6', stroke: c, strokeWidth: 1.2, fill: 'none' })
+      ]
+      break
+    case 'beacon':
+      inner = jsx('path', { d: 'M 9 1.5 L 13.5 12.5 L 4.5 12.5 Z', ...common })
+      break
+    default:
+      inner = [jsx('rect', { x: 4, y: 4, width: 10, height: 6, ...common }), jsx('path', { d: 'M 9 5.5 L 11 7 L 9 8.5 L 7 7 Z', fill: c })]
+  }
+  return Array.isArray(inner)
+    ? jsxs('svg', { width: 18, height: 14, viewBox: '0 0 18 14', 'aria-hidden': true, children: inner })
+    : jsx('svg', { width: 18, height: 14, viewBox: '0 0 18 14', 'aria-hidden': true, children: inner })
+}
+
+const LEGEND_KINDS = [
+  ['server', 'Server'], ['vm', 'Virtual machine'], ['lxc', 'LXC container'], ['container', 'Docker / podman'],
+  ['service', 'Service'], ['project', 'Project'], ['agent', 'Hermes agent'], ['model_endpoint', 'Model endpoint'],
+  ['cron', 'Cron job'], ['peer', 'Tailnet peer']
+]
+const LEGEND_LINKS = [
+  ['hosts', 'hosts'], ['depends_on', 'depends on'], ['uses_model', 'uses model'],
+  ['monitors', 'monitors'], ['proxies_to', 'proxies to']
+]
+
+function Legend() {
+  const [open, setOpen] = React.useState(true)
+  return jsxs('div', { className: 'ia-legend-wrap', children: [
+    jsx('button', {
+      type: 'button',
+      className: 'ia-btn ia-legend-toggle',
+      onClick: () => setOpen(o => !o),
+      children: open ? 'Legend −' : 'Legend +'
+    }),
+    open
+      ? jsxs('div', { className: 'ia-legend', children: [
+          jsx('div', { className: 'ia-legend-title', children: 'Node kinds' }),
+          jsx('div', { className: 'ia-legend-grid', children: LEGEND_KINDS.map(([kind, label]) =>
+            jsxs('div', { className: 'ia-legend-row', children: [
+              jsx(LegendGlyph, { kind }),
+              jsx('span', { children: label })
+            ] }, kind)) }),
+          jsx('div', { className: 'ia-legend-title', children: 'Links' }),
+          jsx('div', { className: 'ia-legend-grid', children: LEGEND_LINKS.map(([rel, label]) => {
+            const style = relationStyle(rel)
+            return jsxs('div', { className: 'ia-legend-row', children: [
+              jsx('svg', { width: 18, height: 14, 'aria-hidden': true, children: jsx('line', { x1: 1, y1: 7, x2: 17, y2: 7, stroke: style.color, strokeWidth: 1.6, strokeDasharray: style.dash || undefined }) }),
+              jsx('span', { children: label })
+            ] }, rel)
+          }) })
+        ] })
+      : null
+  ] })
+}
+
+function Inspector({ node, busy, onClose, onRefetch, setBusy, guardrail, counts, fleetIncidents, lastSweep, onFocus }) {
   const [tab, setTab] = React.useState('overview')
   const detail = useNode(node ? node.id : null)
 
@@ -1432,16 +1615,10 @@ function Inspector({ node, busy, onClose, onRefetch, setBusy, guardrail }) {
   }, [node && node.id])
 
   if (!node) {
-    return jsxs('div', {
-      className: 'ia-inspector ia-inspector-empty',
-      children: [
-        jsx('div', { className: 'ia-inspector-title', children: 'Inspector' }),
-        jsx('div', {
-          className: 'ia-muted',
-          children: 'Select a node on the graph to see its registry entry, the live diff, uptime and recovery commands.'
-        })
-      ]
-    })
+    return hud('ia-inspector ia-inspector-empty', [
+      jsx('div', { className: 'ia-inspector-title', children: 'Fleet' }),
+      jsx(FleetPanel, { counts, incidents: fleetIncidents, lastSweep, onFocus })
+    ])
   }
 
   const data = detail.data || {}
@@ -1983,6 +2160,29 @@ const CSS = `
 .ia-zoom { position:absolute; right:12px; top:12px; z-index:2; display:flex; flex-direction:column; gap:4px; }
 .ia-zoom button { width:26px; height:26px; border:none; clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px); background:rgba(17,23,38,.85); box-shadow:inset 0 0 0 1px rgba(96,126,190,.3); color:#9fd8ff; cursor:pointer; font-size:12px; }
 .ia-zoom button:hover { box-shadow:inset 0 0 0 1px rgba(125,211,252,.7); }
+.ia-rail { display:flex; align-items:center; gap:6px; padding:6px 14px; border-bottom:1px solid rgba(96,126,190,.14); background:rgba(15,23,40,.35); flex-wrap:wrap; }
+.ia-rail-label { font-size:8.5px; text-transform:uppercase; letter-spacing:.16em; color:#5f6f8f; margin-right:5px; }
+.ia-rail-spacer { flex:1; }
+.ia-rail-info { font-size:9.5px; color:#7fa7d9; letter-spacing:.05em; font-variant-numeric:tabular-nums; }
+.ia-fleet-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:6px; }
+.ia-fleet-cell { clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px); background:rgba(17,23,38,.7); box-shadow:inset 0 0 0 1px rgba(96,126,190,.22); padding:8px 8px; border:none; cursor:pointer; text-align:left; color:inherit; transition:box-shadow .15s ease; }
+.ia-fleet-cell:hover { box-shadow:inset 0 0 0 1px rgba(125,211,252,.6); }
+.ia-fleet-zero { opacity:.45; }
+.ia-fleet-num { font-size:19px; font-weight:700; color:#eaf4ff; display:flex; align-items:center; gap:7px; font-variant-numeric:tabular-nums; }
+.ia-fleet-diamond { width:8px; height:8px; flex:0 0 8px; clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%); }
+.ia-fleet-label { font-size:8px; text-transform:uppercase; letter-spacing:.1em; color:#5f6f8f; margin-top:3px; }
+.ia-inc-item { background:none; border:none; color:inherit; text-align:left; padding:3px 0; cursor:pointer; display:flex; flex-direction:column; gap:1px; width:100%; font:inherit; }
+.ia-inc-item:hover { color:#eaf4ff; }
+.ia-inc-head { display:flex; gap:7px; align-items:baseline; font-size:11px; }
+.ia-inc-detail { font-size:10px; color:#8b93a5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ia-legend-wrap { position:absolute; right:12px; bottom:12px; z-index:2; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+.ia-legend-toggle { min-width:88px; text-align:center; }
+.ia-legend { width:242px; padding:10px 12px; background:rgba(12,18,31,.93); box-shadow:inset 0 0 0 1px rgba(96,126,190,.3); clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px); }
+.ia-legend-title { font-size:8.5px; text-transform:uppercase; letter-spacing:.14em; color:#7fa7d9; margin:8px 0 5px; }
+.ia-legend-title:first-child { margin-top:0; }
+.ia-legend-grid { display:grid; grid-template-columns:1fr 1fr; gap:3px 12px; }
+.ia-legend-row { display:flex; align-items:center; gap:7px; font-size:9.5px; color:#9fb0cc; white-space:nowrap; }
+.ia-legend-row svg { flex:0 0 auto; }
 
 /* ── isometric scene ───────────────────────────────────────────────────── */
 .ia-plat { animation:ia-rise .7s cubic-bezier(.2,.7,.3,1) both; }
@@ -2106,7 +2306,9 @@ const CSS = `
 
 .ia-empty { display:flex; align-items:center; justify-content:center; height:100%; padding:24px; text-align:center; color:#5f6f8f; }
 .ia-inspector { flex:0 0 354px; width:354px; display:flex; flex-direction:column; min-height:0; min-width:0; border-left:1px solid rgba(96,126,190,.2); }
-.ia-inspector-empty { padding:16px; gap:8px; }
+.ia-inspector .ia-hud-in { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; min-width:0; overflow-y:auto; }
+.ia-inspector-empty { padding:0; }
+.ia-inspector-empty .ia-hud-in { padding:14px; gap:10px; }
 .ia-inspector-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; padding:13px 14px 8px; }
 .ia-inspector-title { font-size:13px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; }
 .ia-inspector-meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:5px; }

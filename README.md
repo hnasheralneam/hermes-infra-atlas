@@ -173,6 +173,13 @@ pan/zoom — still selectable, keyboard-reachable and crisp at any zoom):
   calls shake the node with red ripples and scatter red packets along its
   edges; reads and allowed touches flash cyan/green.
 
+The page around it stays deliberately sparse: one command bar (search, guardrail
+and auto-heal, demo toggle, sweep), a slim view rail whose filters roll drift
+statuses up into *matched / needs attention / docs & peers* and double as the
+fleet telemetry line, a collapsible on-canvas legend mapping shapes to kinds and
+colors to relations, and an inspector rail that shows the fleet panel — status
+breakdown plus clickable incidents — whenever no node is selected.
+
 To see it live without the desktop app:
 
 ```bash
