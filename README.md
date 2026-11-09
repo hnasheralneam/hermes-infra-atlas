@@ -47,7 +47,10 @@ infra_query node_id=…      # read one entry (and unlock it for this session)
 
 No registry yet? `infra_bootstrap mode=scaffold_from_live` writes a starter directory from
 what the collectors can actually see (this host, the Hermes runtime, and Proxmox or Headscale
-when those are configured).
+when those are configured). To see the whole thing working without touching a real machine,
+point `registry_path` at the fictional fleet in [`examples/registry`](examples/registry) and
+run `infra_sweep` — six entries, documentation addresses only, one retiring and two failing
+on purpose.
 
 ## The registry entry
 
