@@ -1,0 +1,50 @@
+name: ci
+
+# Two checks that need nothing but node + python: the desktop bundle must parse
+# and must render every registered surface, and the Python half must compile.
+# `pytest` needs a Hermes Agent checkout on PYTHONPATH (it imports hermes_cli and
+# plugins.plugin_storage), so the README documents it instead of faking it here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install react for the render harness
+        run: npm install --no-save --no-package-lock react@19 react-dom@19
+      - name: Syntax-check the desktop bundle
+        run: node --check desktop/plugin.js
+      - name: Render every registered desktop surface
+        run: node tools/render_smoke.mjs --modules node_modules
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile the Python half
+        run: |
+          python -m compileall -q \
+            atlas_tools.py config.py fusion.py hooks.py matcher.py registry_kb.py \
+            schemas.py store.py uptime.py collectors dashboard
+      - name: Every declared tool has a schema
+        run: |
+          python - <<'PY'
+          import re, sys
+          manifest = open("plugin.yaml").read()
+          tools = re.findall(r"^\s+-\s+(\w+)$", manifest.split("provides_tools:")[1].split("provides_hooks:")[0], re.M)
+          schemas = open("schemas.py").read()
+          missing = [t for t in tools if f'"{t}"' not in schemas]
+          print("tools:", tools)
+          sys.exit(f"missing schema: {missing}") if missing else None
+          PY
