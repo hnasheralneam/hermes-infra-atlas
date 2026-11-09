@@ -214,6 +214,34 @@ const flatFleet = () => {
   }
 }
 
+function blastFor(graph, nodeId) {
+  const edges = graph.edges || []
+  const nodes = graph.nodes || []
+  const label = id => {
+    const n = nodes.find(x => x.id === id)
+    return { id, label: (n && n.label) || id, kind: (n && n.kind) || 'service' }
+  }
+  const walk = (first, second, reverseSecond) => {
+    const found = new Set()
+    let frontier = new Set([nodeId])
+    for (let depth = 0; depth < 3 && frontier.size; depth++) {
+      const step = new Set()
+      for (const e of edges) {
+        if (frontier.has(e.target_id) && first.includes(e.relation)) step.add(e.source_id)
+        if (frontier.has(e.source_id) && second.includes(e.relation)) step.add(reverseSecond ? e.source_id : e.target_id)
+      }
+      step.delete(nodeId)
+      step.forEach(id => found.add(id))
+      frontier = step
+    }
+    return Array.from(found).sort().map(label)
+  }
+  return {
+    upstream: walk(['hosts', 'routes_via'], ['depends_on', 'uses_model'], false),
+    downstream: walk(['hosts', 'proxies_to', 'monitors'], ['depends_on', 'uses_model', 'routes_via'], true)
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${port}`)
   try {
@@ -252,16 +280,32 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/node.json') {
       const nodeId = url.searchParams.get('id')
       const fleet = url.searchParams.get('fleet')
-      let pool = FIXTURE.graph.nodes || []
+      let graph = FIXTURE.graph
       if (fleet === 'live') {
         try {
-          const live = JSON.parse(await readFile('/home/sysadmin/.hermes/cache/scratch/live_graph.json', 'utf8'))
-          pool = live.nodes || pool
+          graph = JSON.parse(await readFile('/home/sysadmin/.hermes/cache/scratch/live_graph.json', 'utf8'))
         } catch {}
       }
-      const found = pool.find(n => n.id === nodeId) || FIXTURE.node.node
+      const found = (graph.nodes || []).find(n => n.id === nodeId) || (graph.nodes || [])[0]
+      const doc = found && found.doc_state
+      const live = found && found.live_state
+      const diff =
+        found && found.drift_status === 'changed' && doc && live
+          ? ['host_ip', 'ports', 'systemd_unit']
+              .filter(key => key in doc && key in live && JSON.stringify(doc[key]) !== JSON.stringify(live[key]))
+              .map(key => ({ field: key, doc: doc[key], live: live[key] }))
+          : []
+      const payload = {
+        ...FIXTURE.node,
+        node: found,
+        diff,
+        blast_radius: blastFor(graph, nodeId),
+        probe_history: found && found.health_status === 'up' ? FIXTURE.node.probe_history : [],
+        incidents: (graph.incidents || []).filter(inc => inc.node_id === nodeId),
+        registry_markdown: found && found.registry_path ? `# ${found.label || found.id}\n\nRegistry entry: ${found.registry_path}.` : undefined,
+      }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ ...FIXTURE.node, node: found, diff: found.drift_status === 'changed' ? FIXTURE.node.diff : [], incidents: [] }))
+      res.end(JSON.stringify(payload))
       return
     }
     res.writeHead(404, { 'content-type': 'text/plain' })

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 # Hermes imports this directory as the package ``hermes_plugins.infra_atlas``.
 # A test collector or a stray ``import __init__`` imports it as a bare module

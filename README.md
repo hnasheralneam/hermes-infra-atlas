@@ -4,6 +4,8 @@ A Hermes Agent plugin that turns a Markdown infrastructure registry into a **liv
 self-healing infrastructure graph** — and enforces the rule that an agent reads the
 documentation *before* it touches the box.
 
+![Infra Atlas: isometric fleet topology with a sliding inspector drawer](docs/screenshot.png)
+
 - **Knowledge layer** — `servers/`, `services/`, `projects/` entries with optional YAML
   frontmatter; legacy prose-only entries are parsed heuristically so nothing has to be
   rewritten by hand.
@@ -43,8 +45,9 @@ infra_sweep                # discover + probe + diff
 infra_query node_id=…      # read one entry (and unlock it for this session)
 ```
 
-No registry yet? Turn on **Demo fleet** (page control, or `infra_bootstrap mode=load_demo_fixture`)
-to explore a sanitized 22-node topology with drift, an open incident and uptime history.
+No registry yet? `infra_bootstrap mode=scaffold_from_live` writes a starter directory from
+what the collectors can actually see (this host, the Hermes runtime, and Proxmox or Headscale
+when those are configured).
 
 ## The registry entry
 
@@ -82,7 +85,7 @@ the moment they matter.
 | `infra_sweep` | Run collectors + probes, recompute drift, evaluate incidents, attempt the safe local heal. |
 | `infra_diff` | What changed, which incidents opened, who touched what — over a window. |
 | `infra_upsert` | Create/update/adopt/remove a registry entry, with change-log. |
-| `infra_bootstrap` | Annotate an existing KB, scaffold from live discovery, or load the demo fleet. |
+| `infra_bootstrap` | Annotate an existing KB, or scaffold one from live discovery. |
 | `infra_incidents` | List/get/heal/resolve/escalate incidents; install the zero-token watchdog. |
 
 Bundled skill: `infra-atlas:infra-atlas` (loaded automatically when the plugin is enabled).
@@ -91,7 +94,7 @@ Bundled skill: `infra-atlas:infra-atlas` (loaded automatically when the plugin i
 
 `registry_path`, `guardrail_mode` (`block`/`warn`/`off`), `auto_heal_mode`
 (`auto`/`playbook_only`/`notify_only`/`off`), `failure_threshold`, `heal_cooldown_sec`,
-`demo_mode`, the three zero-config collectors, and the opt-in Proxmox/Headscale
+the three zero-config collectors, and the opt-in Proxmox/Headscale
 credentials (secrets go to `.env` through Hermes and are read with `agent.secret_scope`).
 
 ## What it touches
@@ -115,7 +118,7 @@ No telemetry, no network calls to anything not configured above.
 plugin.yaml          manifest (tools, hooks, settings)
 __init__.py          register(ctx)
 registry_kb.py       Markdown ↔ node model, atomic writer, change-log
-collectors/          local host, Hermes runtime, Proxmox, Headscale, probes, fixture
+collectors/          local host, Hermes runtime, Proxmox, Headscale, probes
 fusion.py            correlation + drift classification + sweep
 uptime.py            probes → incidents → playbook/agent response, watchdog script
 matcher.py           tool call → nodes (IPs, units, VMIDs, paths)
@@ -173,19 +176,26 @@ pan/zoom — still selectable, keyboard-reachable and crisp at any zoom):
   calls shake the node with red ripples and scatter red packets along its
   edges; reads and allowed touches flash cyan/green.
 
-The page around it stays deliberately sparse: one command bar (search, guardrail
-and auto-heal, demo toggle, sweep), a slim view rail whose filters roll drift
-statuses up into *matched / needs attention / docs & peers* and double as the
-fleet telemetry line, a collapsible on-canvas legend mapping shapes to kinds and
-colors to relations, and an inspector rail that shows the fleet panel — status
-breakdown plus clickable incidents — whenever no node is selected.
+The page around it stays deliberately sparse:
+
+- **One floating command bar** — brand + live 24h fleet uptime + sweep age, the view switcher
+  (`Live` / `Alerts` / `Synced` / `All`), inline search, a single policy popover (guardrail
+  mode, downtime response, background watchdog), and one primary `Sweep` action.
+- **A slide-over inspector drawer** that only exists while a node is selected: one contextual
+  primary action (`Adopt Live Drift` when it has drifted, `Run Playbook` when it is down), a
+  symmetric secondary row (`Unlock Chat`, `Ask Hermes`), and three tabs — `Overview`
+  (pitfalls callout, field-by-field diff, properties, clickable blast radius), `Uptime`
+  (24h %, latency sparkline, probe target, incident history with inline resolve), `Runbook`.
+- **Two corner docks**: a collapsible live-activity feed (reads / touches / blocked calls) and
+  a combined zoom + legend control. `Esc` or a click on empty canvas closes the drawer and
+  gives the whole viewport back to the map.
 
 To see it live without the desktop app:
 
 ```bash
 node tools/iso_preview.mjs            # then open the printed URL
-# ?fleet=stub | demo (22 nodes) | single | flat — the control bar can fire
-# guardrail pulses so you can watch the shake/ripple animations.
+# ?fleet=stub | live | single | flat — the control bar can fire guardrail pulses so you
+# can watch the shake/ripple animations.
 ```
 
 MIT.
