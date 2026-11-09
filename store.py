@@ -420,9 +420,12 @@ class AtlasStore:
                 "last_seen_live_at": merged.get("last_seen_live_at"),
                 "updated_at": merged["updated_at"],
             }
-            # ports the caller explicitly cleared must win over the merge
+            # ports/probe the caller explicitly cleared must win over the merge
             if "ports" in node and not node["ports"]:
                 values["ports_json"] = "[]"
+            if "probe" in node and node["probe"] is None:
+                values["probe"] = None
+                values["probe_inferred"] = 0
             columns = ", ".join(values)
             placeholders = ", ".join(f":{c}" for c in values)
             updates = ", ".join(f"{c}=excluded.{c}" for c in values if c != "id")
@@ -546,6 +549,28 @@ class AtlasStore:
             if doomed:
                 self._commit_with_retry()
             return len(doomed)
+
+    def purge_fixture_artifacts(self) -> int:
+        """Remove any leftover demo-fixture nodes, edges, incidents and samples."""
+        with self._lock:
+            rows = self._run("SELECT id, host_ip, live_state_json FROM nodes").fetchall()
+            fixture_ids = []
+            for row in rows:
+                ls = _json(row["live_state_json"], {})
+                ip = str(row["host_ip"] or "")
+                if ls.get("source") == "fixture" or ip.startswith("10.20."):
+                    fixture_ids.append(row["id"])
+            for node_id in fixture_ids:
+                self._run("DELETE FROM nodes WHERE id = ?", (node_id,))
+                self._run("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
+                self._run("DELETE FROM incidents WHERE node_id = ?", (node_id,))
+                self._run("DELETE FROM probe_samples WHERE node_id = ?", (node_id,))
+            # Clean up any orphaned probe samples or incidents from deleted fixture nodes
+            self._run("DELETE FROM probe_samples WHERE detail = 'ok' AND node_id NOT IN (SELECT id FROM nodes)")
+            self._run("DELETE FROM incidents WHERE node_id IN ('lxc-201-litellm', 'svc-inject-portal')")
+            if fixture_ids:
+                self._commit_with_retry()
+            return len(fixture_ids)
 
     def close_incidents_for_missing_nodes(self, note: str = "node is no longer observed in the graph") -> list[int]:
         """Resolve incidents whose node disappeared (pruned, renamed, or gone).
@@ -678,15 +703,15 @@ class AtlasStore:
             window_start = now - 86400
             row = self._run(
                 "SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up"
-                " FROM probe_samples WHERE node_id = ? AND ts >= ?",
+                " FROM probe_samples WHERE node_id = ? AND ts >= ? AND status IN ('up', 'degraded', 'down')",
                 (node_id, window_start),
             ).fetchone()
             total = int(row["total"] or 0)
             up = int(row["up"] or 0)
-            uptime = round((up / total) * 100.0, 2) if total else 100.0
+            uptime = round((up / total) * 100.0, 2) if total else None
             self._run(
-                "UPDATE nodes SET health_status = ?, latency_ms = ?, uptime_24h_pct = ?, last_seen_live_at = ?,"
-                " updated_at = ? WHERE id = ?",
+                "UPDATE nodes SET health_status = ?, latency_ms = ?, uptime_24h_pct = COALESCE(?, uptime_24h_pct),"
+                " last_seen_live_at = COALESCE(?, last_seen_live_at), updated_at = ? WHERE id = ?",
                 (
                     status,
                     latency_ms,
@@ -697,6 +722,26 @@ class AtlasStore:
                 ),
             )
             self._commit_with_retry()
+
+    def recompute_uptime_24h(self, node_ids: Optional[Iterable[str]] = None, window_sec: int = 86400) -> None:
+        """Recompute rolling 24h availability percentage from probe_samples."""
+        cutoff = _now() - window_sec
+        targets = list(node_ids) if node_ids is not None else [r["id"] for r in self.list_nodes()]
+        if not targets:
+            return
+        with self._lock:
+            for node_id in targets:
+                row = self._run(
+                    "SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up"
+                    " FROM probe_samples WHERE node_id = ? AND ts >= ? AND status IN ('up', 'degraded', 'down')",
+                    (node_id, cutoff),
+                ).fetchone()
+                total = int(row["total"] or 0) if row else 0
+                if total > 0:
+                    up = int(row["up"] or 0)
+                    pct = round((up / total) * 100.0, 2)
+                    self._run("UPDATE nodes SET uptime_24h_pct = ? WHERE id = ?", (pct, node_id))
+            self._commit()
 
     def bump_failure_streak(self, node_id: str) -> int:
         with self._lock:

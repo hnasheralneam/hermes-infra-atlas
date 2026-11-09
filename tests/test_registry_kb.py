@@ -123,3 +123,25 @@ def test_bootstrap_annotate_is_idempotent(plugin_home, legacy_registry):
     again = kb.bootstrap_annotate(legacy_registry)
     assert again["annotated"] == []
     assert len(again["skipped"]) == 3
+
+
+def test_udp_ports_and_index_decommissioned_entries(plugin_home, registry):
+    H.load_plugin()
+    kb = H.submodule("registry_kb")
+    (registry / "services" / "stk.md").write_text(
+        "# Supertuxkart Server\n\n| Field | Value |\n|---|---|\n| **Network** | 192.168.100.83 |\n| **Port** | UDP **2759** |\n",
+        encoding="utf-8",
+    )
+    (registry / "services" / "old-relay.md").write_text(
+        "# Old Relay\n\nHost 10.0.0.143 port 8090.\n",
+        encoding="utf-8",
+    )
+    (registry / "INDEX.md").write_text(
+        "# Index\n\n## Decommissioned / Superseded / Down Services\n\n| Service | File |\n|---|---|\n| Old Relay | `services/old-relay.md` |\n",
+        encoding="utf-8",
+    )
+    nodes, _ = kb.parse_registry(registry)
+    by_id = {n["id"]: n for n in nodes}
+    assert by_id["svc-stk"]["probe"] is None
+    assert by_id["svc-old-relay"]["doc_status"] == "removed"
+    assert by_id["svc-old-relay"]["probe"] is None

@@ -15,7 +15,7 @@ from typing import Any, Callable, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ("kb", "local", "hermes", "proxmox", "headscale", "probes", "fixture")
+SOURCES = ("kb", "local", "hermes", "proxmox", "headscale", "probes")
 
 
 @dataclass
@@ -56,10 +56,6 @@ def run_source(source: str, **kwargs: Any) -> CollectorResult:
             from . import probes
 
             result = probes.collect(kwargs.get("targets") or [], timeout=kwargs.get("timeout"))
-        elif source == "fixture":
-            from . import fixture
-
-            result = fixture.collect()
         else:
             result = CollectorResult(source=source, errors=[f"unknown source {source!r}"])
     except Exception as exc:  # a collector must never abort the sweep

@@ -26,6 +26,8 @@ def _base_url() -> str:
     from .. import config as plugin_config
 
     url = str(plugin_config.setting("proxmox_url") or "").strip().rstrip("/")
+    if url.endswith("/api2/json"):
+        url = url[: -len("/api2/json")].rstrip("/")
     if url and not url.startswith(("http://", "https://")):
         url = "https://" + url
     if url and ":" not in url.split("://", 1)[-1]:
@@ -97,7 +99,15 @@ def collect() -> CollectorResult:
                 vmid = guest.get("vmid")
                 if vmid in (None, ""):
                     continue
+                if guest.get("template"):
+                    continue
                 guest_status = str(guest.get("status") or "unknown")
+                if guest_status != "running":
+                    continue
+                tags_raw = str(guest.get("tags") or "")
+                tag_set = {t.strip().lower() for t in tags_raw.replace(",", ";").split(";") if t.strip()}
+                if kind == "vm" and len(guests) > 25 and "infrastructure" not in tag_set:
+                    continue
                 label = str(guest.get("name") or f"{kind}-{vmid}")
                 result.nodes.append(
                     {

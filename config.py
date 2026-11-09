@@ -29,7 +29,6 @@ DEFAULTS: dict[str, Any] = {
     "auto_heal_mode": "auto",
     "failure_threshold": 2,
     "heal_cooldown_sec": 300,
-    "demo_mode": False,
     "enable_local_collector": True,
     "enable_hermes_collector": True,
     "enable_probes": True,

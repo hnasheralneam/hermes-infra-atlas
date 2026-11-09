@@ -46,11 +46,6 @@ config_schema:
     default: 300
     label: "Auto-heal cooldown (seconds)"
     description: "Minimum gap between automated remediation attempts on the same node."
-  demo_mode:
-    type: bool
-    default: false
-    label: "Demo fixture fleet"
-    description: "Overlay the bundled sanitized fleet so the graph, drift and incident views are populated without any external API credentials."
   enable_local_collector:
     type: bool
     default: true

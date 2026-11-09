@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 FOLDERS = {"servers": "server", "services": "service", "projects": "project"}
-KIND_PREFIX = {"server": "srv", "service": "svc", "project": "proj", "vm": "vm", "lxc": "lxc", "container": "ct"}
-KIND_STRATUM = {"server": 1, "network": 1, "vm": 2, "lxc": 2, "container": 2, "service": 3, "project": 3}
+KIND_PREFIX = {"server": "srv", "service": "svc", "project": "proj", "vm": "vm", "lxc": "lxc", "container": "ct", "agent": "agent"}
+KIND_STRATUM = {"server": 1, "network": 1, "vm": 2, "lxc": 2, "container": 2, "service": 3, "project": 3, "agent": 4, "model_endpoint": 4, "cron": 4}
 
 _FRONTMATTER_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.S)
 _PRIVATE_IP_RE = re.compile(
@@ -47,13 +47,13 @@ _PORT_RES = (
     re.compile(r"^\s*\|\s*(?:port|listen)\s*\|\s*(\d{2,5})\b", re.I),
 )
 _MANAGED_RES = (
-    (re.compile(r"systemctl\s+--user|systemd\s*-{0,1}\s*user", re.I), "systemd-user"),
+    (re.compile(r"systemctl\s+--user|systemd\s*-{0,2}\s*user", re.I), "systemd-user"),
     (re.compile(r"\bsystemctl\b|\bsystemd\b", re.I), "systemd-system"),
     (re.compile(r"docker[ -]?compose|podman[ -]?compose", re.I), "docker-compose"),
     (re.compile(r"llama-dashboard\s+Control|llama-ctl", re.I), "llama-control"),
     (re.compile(r"\b(?:qm|pct|pvesh)\b", re.I), "proxmox"),
 )
-_REMOVED_RE = re.compile(r"\b(REMOVED|DECOMMISSIONED|DEPRECATED|RETIRED|GONE)\b")
+_REMOVED_RE = re.compile(r"\b(REMOVED|DECOMMISSIONED|DEPRECATED|RETIRED|GONE|SUPERSEDED|MERGED\s+INTO)\b", re.I)
 _PITFALL_HEADING_RE = re.compile(r"^#{2,6}\s*(pitfalls?|gotchas?|caveats?|important|warnings?|do not|don't)\b", re.I)
 _BOLD_RULE_RE = re.compile(r"^\s*(?:[-*]\s*)?\*\*(never|do not|don't|always|must)\b.*?\*\*", re.I)
 
@@ -89,6 +89,26 @@ def _now_est() -> str:
         return _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
+def _parse_scalar(val: str) -> Any:
+    val = val.strip()
+    if not val or val in {"~", "null", "None"}:
+        return None
+    if val.startswith("[") and val.endswith("]"):
+        inner = val[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_scalar(part) for part in inner.split(",") if part.strip()]
+    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+        return val[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if val.lower() in {"true", "yes", "on"}:
+        return True
+    if val.lower() in {"false", "no", "off"}:
+        return False
+    if re.fullmatch(r"-?\d+", val):
+        return int(val)
+    return val
+
+
 def load_yaml(text: str) -> dict[str, Any]:
     """Parse frontmatter with the same YAML policy Hermes uses (ruamel, safe)."""
     if not text.strip():
@@ -107,7 +127,17 @@ def load_yaml(text: str) -> dict[str, Any]:
         data = _pyyaml.safe_load(text)
         return data if isinstance(data, dict) else {}
     except Exception:
-        return {}
+        pass
+    out: dict[str, Any] = {}
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or ":" not in s:
+            continue
+        k, _, v = s.partition(":")
+        key = k.strip()
+        if key:
+            out[key] = _parse_scalar(v)
+    return out
 
 
 def dump_scalar(value: Any) -> str:
@@ -255,7 +285,11 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
             "",
         )
         retired = bool(_REMOVED_RE.search(title_text)) or bool(
-            re.match(r"^\**\s*(?:status|state)\s*\**\s*:?\s*\**\s*(?:removed|decommissioned|retired)\b", first_para, re.I)
+            re.match(
+                r"^\**\s*(?:status|state)\s*\**\s*:?\s*\**\s*(?:removed|decommissioned|retired|relocated|superseded|inactive)\b",
+                first_para,
+                re.I,
+            )
         )
         status = "removed" if retired else "active"
 
@@ -316,10 +350,26 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
     if isinstance(depends_on, str):
         depends_on = [d.strip() for d in depends_on.split(",") if d.strip()]
 
+    guest_vmids: list[int] = []
+    if kind == "server":
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("-", "*")) and not stripped.lstrip("-* ").startswith("~~"):
+                for gm in re.finditer(r"`?(?:VM|LXC|CT)\s*(\d{2,4})`?", stripped, re.I):
+                    gid = int(gm.group(1))
+                    if gid not in guest_vmids:
+                        guest_vmids.append(gid)
+
     probe = str(meta.get("probe") or "").strip() or None
     probe_explicit = bool(probe)
-    if not probe and ip_match and ports:
-        probe = f"tcp://{ip_match}:{ports[0]}"
+    if not probe and ip_match and ports and status != "removed":
+        tcp_ports = [
+            p
+            for p in ports
+            if not re.search(rf"(?:\budp\s*\**{re.escape(p)}\b|\b{re.escape(p)}/udp\b)", body, re.I)
+        ]
+        if tcp_ports:
+            probe = f"tcp://{ip_match}:{tcp_ports[0]}"
 
     try:
         stat = path.stat()
@@ -327,10 +377,11 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
     except OSError:
         mtime, digest = None, None
 
+    resolved_kind = str(meta.get("kind") or kind)
     node = {
         "id": node_id,
-        "kind": str(meta.get("kind") or kind),
-        "stratum": int(meta.get("stratum") or KIND_STRATUM.get(kind, 3)),
+        "kind": resolved_kind,
+        "stratum": int(meta.get("stratum") or KIND_STRATUM.get(resolved_kind, 3)),
         "label": label,
         "parent_id": str(meta.get("parent_id") or "").strip() or None,
         "host_ip": str(ip_match).strip() if ip_match else None,
@@ -350,6 +401,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
         "probe_inferred": bool(probe) and not probe_explicit,
         "depends_on": [str(d) for d in depends_on],
         "aliases": [str(a) for a in aliases],
+        "guest_vmids": guest_vmids,
         "doc_status": status,
         "drift_status": "doc_only" if kind == "project" else "stale",
         "health_status": "unknown",
@@ -373,6 +425,26 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
     return node
 
 
+def _decommissioned_in_index(root: Path) -> set[str]:
+    """Relative entry paths listed under a Decommissioned/Retired section of INDEX.md."""
+    text = read_index_text(root)
+    if not text:
+        return set()
+    active_refs: set[str] = set()
+    retired_refs: set[str] = set()
+    in_retired = False
+    for line in text.splitlines():
+        if line.startswith("#"):
+            in_retired = bool(re.search(r"\b(decommissioned|superseded|retired|removed|down\s+services)\b", line, re.I))
+            continue
+        for match in re.finditer(r"\b((?:servers|services|projects)/[A-Za-z0-9._-]+\.md)\b", line):
+            if in_retired:
+                retired_refs.add(match.group(1))
+            else:
+                active_refs.add(match.group(1))
+    return retired_refs - active_refs
+
+
 def parse_registry(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return ``(nodes, edges)`` parsed from every entry under ``root``."""
     root = Path(root)
@@ -380,6 +452,7 @@ def parse_registry(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
     edges: list[dict[str, Any]] = []
     if not root.exists():
         return nodes, edges
+    retired_paths = _decommissioned_in_index(root)
     for folder, kind in FOLDERS.items():
         directory = root / folder
         if not directory.is_dir():
@@ -388,6 +461,15 @@ def parse_registry(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
             node = parse_entry(path, root, kind_hint=kind)
             if not node:
                 continue
+            if (
+                node.get("registry_path") in retired_paths
+                and not (node.get("doc_state") or {}).get("frontmatter")
+                and node.get("doc_status") == "active"
+            ):
+                node["doc_status"] = "removed"
+                node["doc_state"]["status"] = "removed"
+                node["probe"] = None
+                node["doc_state"]["probe"] = None
             nodes.append(node)
             if node.get("parent_id"):
                 edges.append(
@@ -450,20 +532,26 @@ def prepend_change_log(root: Path, heading: str, bullets: list[str]) -> None:
 
 
 def update_index(root: Path, node: dict[str, Any]) -> None:
-    """Best-effort INDEX.md row; never rewrites an existing mention."""
+    """Best-effort INDEX.md row; updates 3-column atlas rows in place and never mangles prose tables."""
     root = Path(root)
     path = root / "INDEX.md"
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8", errors="replace")
-    link = f"]({node['registry_path']})"
-    if node["id"] in text or link in text:
-        return
     section_title = {"server": "Servers", "service": "Services", "project": "Projects"}.get(node["kind"], "Services")
     detail = node.get("host_ip") or ""
     if node.get("ports"):
         detail = f"{detail}:{node['ports'][0]}" if detail else f"port {node['ports'][0]}"
     row = f"| [`{node['label']}`]({node['registry_path']}) | {detail or '—'} | {node.get('managed_by') or '—'} |\n"
+    row_re = re.compile(rf"^\|\s*\[[^\]]+\]\({re.escape(str(node['registry_path']))}\)\s*\|[^|]+\|[^|]+\|\s*$", re.M)
+    if row_re.search(text):
+        updated = row_re.sub(row.rstrip("\n"), text, count=1)
+        if updated != text:
+            _atomic_write(path, updated)
+        return
+    link = f"]({node['registry_path']})"
+    if node["id"] in text or link in text:
+        return
     lines = text.splitlines(keepends=True)
     header_index = None
     heading_re = re.compile(rf"^#+\s*{section_title}\b", re.I)
@@ -588,6 +676,7 @@ def bootstrap_annotate(root: Path, dry_run: bool = False) -> dict[str, Any]:
     errors: list[str] = []
     if not root.exists():
         return {"annotated": [], "skipped": [], "errors": [f"registry path does not exist: {root}"]}
+    retired_paths = _decommissioned_in_index(root)
     for folder, kind in FOLDERS.items():
         directory = root / folder
         if not directory.is_dir():
@@ -602,8 +691,12 @@ def bootstrap_annotate(root: Path, dry_run: bool = False) -> dict[str, Any]:
                 node = parse_entry(path, root, kind_hint=kind)
                 if not node:
                     continue
+                rel = str(path.relative_to(root))
+                if rel in retired_paths and node.get("doc_status") == "active":
+                    node["doc_status"] = "removed"
+                    node["probe"] = None
                 if dry_run:
-                    annotated.append(str(path.relative_to(root)))
+                    annotated.append(rel)
                     continue
                 front = {
                     "id": node["id"],

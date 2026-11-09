@@ -3,12 +3,12 @@
 Copy `catalog/infra-atlas.yaml` to `plugin-catalog/infra-atlas.yaml` in a branch of
 `NousResearch/hermes-agent`, open the PR, and paste the description below.
 
-Pinned commit: `546b7f225e0d94af3e585183dd10efc8898f1df7` (repo `main`).
+Pinned commit: `417ec0e571258078d9096d0989fcaa2e5bc1e7ec` (repo `main`).
 Re-run the pre-submit gate against that exact checkout first:
 
 ```bash
 git clone https://github.com/hnasheralneam/hermes-infra-atlas /tmp/ia && cd /tmp/ia
-git checkout 546b7f225e0d94af3e585183dd10efc8898f1df7
+git checkout 417ec0e571258078d9096d0989fcaa2e5bc1e7ec
 hermes plugins validate . --install-deps   # passes locally today
 ```
 
@@ -75,7 +75,7 @@ and keeps the two honest with each other.
 - **Behaviour that can block work.** With the default `guardrail_mode: block`, the plugin can
   refuse a `terminal`/`write_file`/`patch` call. It says exactly what to read first and fails
   open on any internal error.
-- **Data storage.** SQLite under `$HERMES_HOME/plugin-data/infra-atlas/data.db`: nodes, edges,
+- **Data storage.** SQLite under `$HERMES_HOME/plugin-data/infra-atlas/atlas.db`: nodes, edges,
   probe samples, incidents, session read-unlocks and tool-activity rows. Nothing leaves the
   machine.
 
@@ -89,7 +89,7 @@ and a dashboard router.
 
 ## Verification in this repo
 
-- `pytest`: 43 passed (registry parse/write, fusion drift, guardrail, uptime, collectors, API,
+- `pytest`: 68 passed (registry parse/write, fusion drift, guardrail, uptime, collectors, API,
   tools). One test skips where `ruamel.yaml` is absent.
 - `hermes plugins doctor`: 6 tools, 3 hooks, no drift.
 - `hermes plugins validate`: all checks pass, including `no core override` and `desktop surface`.

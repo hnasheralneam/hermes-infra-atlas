@@ -144,19 +144,6 @@ def test_period_parsing():
     assert runtime._period_seconds({"kind": "cron", "expr": "nonsense"}) is None
 
 
-def test_fixture_is_sanitized_and_complete(plugin_home):
-    H.load_plugin()
-    fixture = H.submodule("collectors.fixture")
-    payload = fixture.load()
-    assert payload["sanitized"] is True
-    assert len(payload["nodes"]) == 22
-    addresses = {node.get("host_ip") for node in payload["nodes"] if node.get("host_ip")}
-    # only the documentation ranges used by the fixture
-    assert all(addr.startswith(("10.20.", "100.64.")) for addr in addresses)
-    statuses = {node["drift_status"] for node in payload["nodes"]}
-    assert {"matched", "changed", "unregistered", "stale"} <= statuses
-
-
 def test_an_unresolvable_host_does_not_stall_the_sweep(plugin_home):
     """DNS hangs used to cost minutes: getaddrinfo ignores the socket timeout."""
     import time

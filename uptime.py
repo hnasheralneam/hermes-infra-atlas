@@ -208,12 +208,29 @@ def evaluate(
         if health == "up":
             store.reset_failure_streak(node_id)
             if active:
+                summary = active.get("resolution_summary") or "Recovered on its own (probe is up again)."
                 store.update_incident(
                     active["id"],
                     status="resolved",
                     resolved_at=now,
-                    resolution_summary=active.get("resolution_summary") or "Recovered on its own (probe is up again).",
+                    resolution_summary=summary,
                 )
+                try:
+                    from . import registry_kb
+                    from .hooks import _broadcast
+
+                    registry_kb.prepend_change_log(
+                        plugin_config.registry_root(),
+                        f"{registry_kb._now_est()} — [infra-atlas] incident #{active['id']} auto-resolved: {node_id}",
+                        [
+                            f"**Node:** `{node_id}` ({node.get('registry_path') or 'no entry'})",
+                            f"**Trigger:** {active.get('trigger_error')}",
+                            f"**Outcome:** {summary}",
+                        ],
+                    )
+                    _broadcast("incident.resolved", {"incident_id": active["id"], "node_id": node_id, "status": "resolved"})
+                except Exception:  # noqa: BLE001
+                    pass
                 healed.append({"node_id": node_id, "incident_id": active["id"]})
             continue
 
@@ -348,6 +365,7 @@ def _run() -> int:
     for incident in pending:
         node = store.get_node(incident["node_id"])
         if node:
+            store.record_session_read("cron-watchdog", node["id"], "watchdog")
             briefs.append(uptime.remediation_brief(store, node, incident))
         else:
             # The node left the graph (renamed or pruned) but the incident is still

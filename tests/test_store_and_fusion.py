@@ -137,6 +137,59 @@ def test_blast_radius_follows_host_edges(plugin_home, registry, monkeypatch):
     store = H.submodule("store").get_store()
     radius = fusion.blast_radius(store, "svc-alpha")
     assert [item["id"] for item in radius["upstream"]] == ["srv-host1"]
+    host_radius = fusion.blast_radius(store, "srv-host1")
+    assert [item["id"] for item in host_radius["downstream"]] == ["svc-alpha"]
+
+
+def test_model_endpoint_stays_separate_and_links_to_provider_service(plugin_home, registry, monkeypatch):
+    H.load_plugin()
+    H.configure({"registry_path": str(registry), "enable_probes": False})
+    _seed_registry(registry)
+    fusion = H.submodule("fusion")
+    collectors = H.submodule("collectors")
+
+    live = collectors.CollectorResult(
+        source="hermes",
+        nodes=[
+            {"id": "agent-hermes-default", "kind": "agent", "stratum": 4, "label": "Hermes (default)", "health_status": "up"},
+            {"id": "model-alpha-llm", "kind": "model_endpoint", "stratum": 4, "label": "alpha-llm", "host_ip": "10.0.0.5", "ports": ["4000"], "managed_by": "hermes-config", "health_status": "up"},
+        ],
+        edges=[
+            {"source_id": "agent-hermes-default", "target_id": "model-alpha-llm", "relation": "uses_model", "origin": "live"},
+        ],
+    )
+    monkeypatch.setattr(fusion, "run_sources", lambda *a, **kw: [live])
+    fusion.run_sweep(sources=["kb", "hermes"], trigger_auto_heal=False)
+
+    store = H.submodule("store").get_store()
+    assert store.get_node("model-alpha-llm") is not None
+    assert store.get_node("svc-alpha")["managed_by"] == "systemd-user"
+    edges = {(e["source_id"], e["target_id"], e["relation"]) for e in store.list_edges()}
+    assert ("agent-hermes-default", "model-alpha-llm", "uses_model") in edges
+    assert ("model-alpha-llm", "svc-alpha", "depends_on") in edges
+
+
+def test_sweep_recomputes_uptime_24h_from_probe_samples(plugin_home, registry, monkeypatch):
+    H.load_plugin()
+    H.configure({"registry_path": str(registry), "enable_probes": True})
+    _seed_registry(registry)
+    fusion = H.submodule("fusion")
+    collectors = H.submodule("collectors")
+
+    monkeypatch.setattr(fusion, "run_sources", lambda *a, **kw: [])
+    monkeypatch.setattr(
+        fusion,
+        "run_source",
+        lambda source, **kw: collectors.CollectorResult(
+            source="probes",
+            nodes=[
+                {"id": "svc-alpha", "health_status": "up", "latency_ms": 2.5, "live_state": {"probe_detail": "TCP 4000 connected"}},
+            ],
+        ),
+    )
+    fusion.run_sweep(sources=["kb", "probes"], trigger_auto_heal=False)
+    store = H.submodule("store").get_store()
+    assert store.get_node("svc-alpha")["uptime_24h_pct"] == 100.0
 
 
 def test_writes_wait_for_another_process_holding_the_lock(plugin_home):

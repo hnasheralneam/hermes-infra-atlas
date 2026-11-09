@@ -55,7 +55,7 @@ INFRA_SWEEP = {
             "sources": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Subset of: kb, local, hermes, proxmox, headscale, probes, fixture. Default: all enabled.",
+                "description": "Subset of: kb, local, hermes, proxmox, headscale, probes. Default: all enabled.",
             },
             "probe_timeout_sec": {"type": "number", "description": "Per-probe timeout. Default from settings (1.5)."},
             "trigger_auto_heal": {
@@ -126,14 +126,14 @@ INFRA_BOOTSTRAP = {
     "description": (
         "Onboard a knowledge base in one call. 'annotate_existing_kb' adds clean YAML frontmatter to legacy "
         "Markdown entries without touching their prose; 'scaffold_from_live' creates entries from what is "
-        "actually running; 'load_demo_fixture' fills the graph with the bundled sanitized fleet."
+        "actually running."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["annotate_existing_kb", "scaffold_from_live", "load_demo_fixture"],
+                "enum": ["annotate_existing_kb", "scaffold_from_live"],
                 "default": "annotate_existing_kb",
             },
             "dry_run": {"type": "boolean", "default": False},

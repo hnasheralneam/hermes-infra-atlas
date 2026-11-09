@@ -9,7 +9,8 @@
  *
  * The topology is a terraced isometric diorama drawn as SVG: one platform per
  * stratum (hardware at the back, agents at the front), a distinct 3-D shape
- * per node kind, and edges routed on the tile grid — see the iso scene section.
+ * per node kind, and edges routed on the tile grid — wrapped in a minimal,
+ * floating glass HUD with a slide-over inspector drawer.
  */
 
 import { cn, host, STATUSBAR_AREAS, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, TRANSCRIPT_DIRECTIVE_AREA, useQuery } from '@hermes/plugin-sdk'
@@ -22,14 +23,13 @@ const PAGE_PATH = '/infra-atlas'
 let API = null // ctx, kept for ctx.rest / ctx.storage
 let pendingSelect = null
 
-const DRIFT_ORDER = ['changed', 'unregistered', 'stale', 'observed', 'matched', 'doc_only']
 const DRIFT_LABEL = {
-  matched: 'matched',
-  changed: 'drift',
-  unregistered: 'unregistered',
-  stale: 'stale',
-  observed: 'peer',
-  doc_only: 'doc only'
+  matched: 'Matched',
+  changed: 'Drift',
+  unregistered: 'Unregistered',
+  stale: 'Stale',
+  observed: 'Peer',
+  doc_only: 'Doc only'
 }
 const HEALTH_COLOR = {
   up: 'var(--ui-success, #10b981)',
@@ -45,7 +45,6 @@ const DRIFT_COLOR = {
   observed: 'var(--ui-text-tertiary, #8b8f98)',
   doc_only: 'var(--ui-text-quaternary, #6b7280)'
 }
-// drift statuses roll up into three view groups the UI filters by
 const DRIFT_GROUP = {
   matched: 'matched',
   changed: 'attention',
@@ -75,6 +74,16 @@ const addressOf = node => {
   const port = (node.ports || [])[0]
   if (!ip && !port) return ''
   return port ? `${ip || '—'}:${port}` : ip
+}
+const truncate = (text, limit) => {
+  const value = String(text || '')
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value
+}
+const format = value => {
+  if (value === null || value === undefined) return '—'
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '—'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
 }
 
 function useGraph(interval = 10000) {
@@ -107,14 +116,11 @@ const ISO_HW = ISO.tileW / 2
 const ISO_HH = ISO.tileH / 2
 const STRATUM_NAME = { 1: 'HARDWARE', 2: 'COMPUTE', 3: 'SERVICES', 4: 'AGENTS · MODELS' }
 
-// continuous grid coordinates → screen px; z counts terrace steps
 const projX = (x, y) => (x - y) * ISO_HW
 const projY = (x, y, z) => (x + y) * ISO_HH - z * ISO.stepZ
 const r2 = n => Math.round(n * 10) / 10
 const sid = id => String(id).replace(/[^a-zA-Z0-9_-]/g, '_')
 
-// deterministic 0…1 per node id + salt: micro-animation phases stay stable
-// across polls and never flicker
 function seeded(id, salt) {
   let h = 2166136261 ^ Math.imul(salt + 1, 0x9e3779b1)
   const s = String(id)
@@ -128,7 +134,6 @@ function seeded(id, salt) {
   return (h >>> 0) / 4294967296
 }
 
-// per-kind visual identity: silhouette, accent, material, label anchor
 const KIND_SCENE = {
   server: { shape: 'rack', accent: '#dbe3f0', mat: '#4a5060', top: 54, shadow: 34 },
   vm: { shape: 'tower', accent: '#818cf8', mat: '#424a5e', top: 52, shadow: 26 },
@@ -148,22 +153,52 @@ const RELATION_STYLE = {
   hosts: { color: '#96a0b5', width: 1.7, dash: '', flow: 26 },
   depends_on: { color: '#a78bfa', width: 1.4, dash: '5 4', flow: 15 },
   uses_model: { color: '#22d3ee', width: 1.4, dash: '', flow: 19 },
+  provides_model: { color: '#e879f9', width: 1.4, dash: '3 3', flow: 18 },
   monitors: { color: '#f59e0b', width: 1.2, dash: '2 4', flow: 12 },
   proxies_to: { color: '#f472b6', width: 1.4, dash: '4 3', flow: 17 },
-  routes_via: { color: '#2dd4bf', width: 1.4, dash: '4 3', flow: 17 }
+  routes_via: { color: '#2dd4bf', width: 1.4, dash: '4 3', flow: 17 },
+  touches: { color: '#38bdf8', width: 1.3, dash: '3 4', flow: 14 }
 }
 const relationStyle = relation =>
   RELATION_STYLE[relation] || { color: '#7d8798', width: 1.3, dash: '', flow: 22 }
 
 const byLabel = (a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id))
 
-// Plan the scene: strata → terraced platforms, nodes → tile slots (children
-// clustered under their parent so host edges stay short), plus the occupancy
-// and z maps the edge router walks.
+const MAX_MEMO_ENTRIES = 64
+const scenePlanCache = new Map()
+const edgeRouteCache = new Map()
+const geometryCache = new Map()
+
+function rememberMemo(map, key, value) {
+  if (map.has(key)) map.delete(key)
+  map.set(key, value)
+  while (map.size > MAX_MEMO_ENTRIES) {
+    const oldestKey = map.keys().next().value
+    if (oldestKey === undefined) break
+    map.delete(oldestKey)
+  }
+  return value
+}
+
+function nodeTopologySignature(nodes) {
+  return nodes
+    .map(node => [node.id || '', node.label || '', node.stratum ?? 3, node.parent_id || '', node.kind || ''].join('\u0001'))
+    .join('\u0002')
+}
+
+function edgeTopologySignature(edges) {
+  return edges
+    .map(edge => [edge.source_id || '', edge.target_id || '', edge.relation || ''].join('\u0001'))
+    .join('\u0002')
+}
+
 function planScene(nodes) {
   if (!nodes.length) {
-    return { platforms: [], placed: new Map(), zAt: () => 0, latticeOk: () => false, hugCost: () => 0, stepAt: () => false, width: 760, height: 420, origin: { x: 0, y: 0 } }
+    return { platforms: [], placed: new Map(), zAt: () => 0, latticeOk: () => false, hugCost: () => 0, stepAt: () => false, width: 760, height: 420, origin: { x: 0, y: 0 }, signature: 'empty' }
   }
+  const sig = nodeTopologySignature(nodes)
+  if (scenePlanCache.has(sig)) return scenePlanCache.get(sig)
+
   const byStratum = new Map()
   nodes.forEach(node => {
     const stratum = Math.min(4, Math.max(1, Number(node.stratum || 3)))
@@ -172,7 +207,7 @@ function planScene(nodes) {
   })
   const strata = Array.from(byStratum.keys()).sort((a, b) => a - b)
 
-  const placed = new Map() // id → { node, gx, gy, col, t }
+  const placed = new Map()
   const platforms = []
   let cursorY = 0
   strata.forEach((stratum, t) => {
@@ -195,8 +230,6 @@ function planScene(nodes) {
     loose.sort(byLabel)
     ordered.push(...loose)
 
-    // shallow terraces (1–2 rows): keeps the whole stack's screen footprint
-    // tight, which is what decides how large the shapes render
     const rows = ordered.length > 6 ? 2 : 1
     const cols = Math.max(1, Math.ceil(ordered.length / rows))
     platforms.push({
@@ -211,9 +244,6 @@ function planScene(nodes) {
     })
   })
 
-  // every terrace shares one grid x: the stack then cascades diagonally down
-  // the screen in a tight staircase (centering each terrace in grid space
-  // would grow the bounding box quadratically and shrink all the shapes)
   const sharedW = Math.max(...platforms.map(p => p.cols * ISO.pitch + 4))
   platforms.forEach(p => {
     p.W = sharedW
@@ -229,14 +259,11 @@ function planScene(nodes) {
         z: p.z
       })
     })
-    cursorY = p.P + p.D + 1 // one open joint row between terraces
+    cursorY = p.P + p.D + 1
     delete p.ordered
   })
 
-  // normalise x so all grid coordinates are ≥ 0
   const shiftX = -Math.min(...platforms.map(p => p.L))
-  const GW = Math.max(...platforms.map(p => p.L + p.W)) + shiftX + 1
-  const GH = cursorY
   platforms.forEach(p => {
     p.L += shiftX
   })
@@ -248,8 +275,6 @@ function planScene(nodes) {
   const occupied = new Set()
   placed.forEach(info => occupied.add(`${info.gx},${info.gy}`))
 
-  // z bands: platform surfaces + the open step rows between them (at the
-  // lower terrace's level, so crossing segments slope downhill)
   const bands = []
   platforms.forEach((p, index) => {
     bands.push({ y0: p.P, y1: p.P + p.D, z: p.z })
@@ -260,7 +285,6 @@ function planScene(nodes) {
     for (const band of bands) if (y >= band.y0 && y < band.y1) return band.z
     return platforms[platforms.length - 1].z
   }
-  // the y where the terrace level changes between two grid rows (the cliff lip)
   const zBoundary = (ya, yb) => {
     const lo = Math.min(ya, yb)
     const hi = Math.max(ya, yb)
@@ -273,20 +297,15 @@ function planScene(nodes) {
     for (let index = 0; index < platforms.length - 1; index++) {
       const a = platforms[index]
       const b = platforms[index + 1]
-      // only across the cliff where both terraces exist — never through the void wings
       if (gy >= a.P + a.D && gy < b.P && gx >= Math.max(a.L, b.L) && gx < Math.min(a.L + a.W, b.L + b.W)) return true
     }
     return false
   }
-  // a lattice step is rideable when the middle of its grid-line segment lies
-  // on a platform top or across an open step joint
   const latticeOk = (x1, y1, x2, y2) => {
     const mx = (x1 + x2) / 2
     const my = (y1 + y2) / 2
     return Boolean(platformAt(mx, my) || stepAt(mx, my))
   }
-  // edges running directly along a footprint border cost extra: traces should
-  // keep a tile between themselves and shapes unless a port stub needs the edge
   const hugCost = (x1, y1, x2, y2) => {
     if (y1 === y2) {
       return occupied.has(`${x1},${y1 - 1}`) || occupied.has(`${x1},${y1}`) ? 2.4 : 0
@@ -294,13 +313,12 @@ function planScene(nodes) {
     return occupied.has(`${x1 - 1},${y1}`) || occupied.has(`${x1},${y1}`) ? 2.4 : 0
   }
 
-  // projected scene bounds (platform slabs + room for labels and overhangs)
   let minX = Infinity
   let maxX = -Infinity
   let minY = Infinity
   let maxY = -Infinity
   platforms.forEach(p => {
-    const cliff = 16 + ISO.stepZ // every slab is the same thickness
+    const cliff = 16 + ISO.stepZ
     const corners = [
       { x: projX(p.L, p.P), y: projY(p.L, p.P, p.z) },
       { x: projX(p.L + p.W, p.P), y: projY(p.L + p.W, p.P, p.z) },
@@ -314,11 +332,11 @@ function planScene(nodes) {
       maxY = Math.max(maxY, c.y + cliff)
     })
   })
-  minX -= 30
-  maxX += 30
-  minY -= 104
-  maxY += 10
-  return {
+  minX -= 44
+  maxX += 44
+  minY -= 156
+  maxY += 48
+  return rememberMemo(scenePlanCache, sig, {
     platforms,
     placed,
     occupied,
@@ -329,19 +347,12 @@ function planScene(nodes) {
     stepAt,
     width: maxX - minX + ISO.pad * 2,
     height: maxY - minY + ISO.pad * 2,
-    origin: { x: ISO.pad - minX, y: ISO.pad - minY }
-  }
+    origin: { x: ISO.pad - minX, y: ISO.pad - minY },
+    signature: sig
+  })
 }
 
 // ── edge routing ───────────────────────────────────────────────────────────
-// Traces ride the lattice lines BETWEEN grid squares, like circuit traces in
-// grooves: routes are walks on the integer grid (the same lines the platform
-// tops have etched). Footprints are never entered — a lattice segment only
-// ever runs on tile borders. Earlier traces make a lattice edge expensive,
-// which fans parallel connections onto neighbouring grid lines instead of
-// stacking them; edges hugging a footprint cost extra so traces keep their
-// distance from shapes unless a port stub requires it.
-
 const DIRS = [[1, 0, 0], [-1, 0, 1], [0, 1, 2], [0, -1, 3]]
 
 const portPoint = (info, side) =>
@@ -350,8 +361,6 @@ const portPoint = (info, side) =>
       : side === 'S' ? { x: info.gx + 0.5, y: info.gy + 1 }
         : { x: info.gx + 0.5, y: info.gy }
 
-// a trace leaves/enters a shape through the footprint corner that faces the
-// other endpoint, then continues along the lattice from there
 const exitCorner = (info, side, tx, ty) => {
   if (side === 'E') return { x: info.gx + 1, y: ty >= info.gy ? info.gy + 1 : info.gy }
   if (side === 'W') return { x: info.gx, y: ty >= info.gy ? info.gy + 1 : info.gy }
@@ -420,8 +429,6 @@ function findPath(plan, congestion, start, goal) {
       const ny = current.y + d[1]
       if (!plan.latticeOk(current.x, current.y, nx, ny)) return
       const turn = current.dir >= 0 && current.dir !== d[2] ? 0.95 : 0
-      // crossing a terrace joint costs extra so traces cut across it squarely
-      // instead of running laterally along the step
       const joint = plan.stepAt((current.x + nx) / 2, (current.y + ny) / 2) ? 0.5 : 0
       const cost =
         1 +
@@ -456,7 +463,6 @@ const pointTo = (from, to, distance) => {
   return { x: from.x + dx * k, y: from.y + dy * k }
 }
 
-// polyline with rounded corners: grid-aligned segments, quarter-bezier turns
 function smoothPath(points) {
   if (points.length < 2) return { d: '', length: 0, angle: 0, end: points[0] || { x: 0, y: 0 } }
   let length = 0
@@ -480,6 +486,9 @@ function smoothPath(points) {
 
 function routeEdges(edges, plan) {
   if (!plan.platforms.length) return []
+  const routeKey = `${plan.signature || ''}::${edgeTopologySignature(edges)}`
+  if (edgeRouteCache.has(routeKey)) return edgeRouteCache.get(routeKey)
+
   const congestion = new Map()
 
   const ordered = edges
@@ -487,7 +496,7 @@ function routeEdges(edges, plan) {
     .filter(({ edge }) => plan.placed.has(edge.source_id) && plan.placed.has(edge.target_id) && edge.source_id !== edge.target_id)
     .sort((a, b) => String(a.edge.source_id).localeCompare(String(b.edge.source_id)) || a.index - b.index)
 
-  return ordered.map(({ edge }) => {
+  const result = ordered.map(({ edge }) => {
     const from = plan.placed.get(edge.source_id)
     const to = plan.placed.get(edge.target_id)
     const dx = to.gx - from.gx
@@ -501,8 +510,6 @@ function routeEdges(edges, plan) {
     const goal = exitCorner(to, inSide, from.gx, from.gy)
     let lattice = start && goal ? findPath(plan, congestion, start, goal) : null
     if (!lattice && start && goal) {
-      // fallback: a manhattan walk along lattice lines (may hug shapes when
-      // the grid is packed, but never leaves them)
       const bend = start.y === goal.y || start.x === goal.x
         ? []
         : Math.abs(goal.x - start.x) >= Math.abs(goal.y - start.y)
@@ -511,14 +518,12 @@ function routeEdges(edges, plan) {
       lattice = [...bend, goal]
     }
 
-    // port → corner → lattice walk → corner → port, all on grid lines
     const gridPoints = [a, start, ...lattice, goal, b].filter(Boolean)
     const dedup = []
     gridPoints.forEach(p => {
       const last = dedup[dedup.length - 1]
       if (!last || last.x !== p.x || last.y !== p.y) dedup.push(p)
     })
-    // remember which lattice edges are taken so later traces fan aside
     for (let i = 1; i < dedup.length; i++) {
       const p1 = dedup[i - 1]
       const p2 = dedup[i]
@@ -528,7 +533,6 @@ function routeEdges(edges, plan) {
       }
     }
 
-    // drop collinear middles, project to screen, round the corners
     const simple = []
     dedup.forEach((p, i) => {
       if (i === 0 || i === dedup.length - 1) {
@@ -540,9 +544,6 @@ function routeEdges(edges, plan) {
       const cross = (p.x - prev.x) * (next.y - p.y) - (p.y - prev.y) * (next.x - p.x)
       if (Math.abs(cross) > 0.02) simple.push(p)
     })
-    // project to screen; where a run crosses a terrace step the trace runs to
-    // the cliff lip and drops straight down the cliff face — every segment
-    // stays on an isometric grid line or plumbs vertically, no free diagonals
     const screenPoints = []
     simple.forEach((p, i) => {
       if (i) {
@@ -562,7 +563,6 @@ function routeEdges(edges, plan) {
     const style = relationStyle(edge.relation)
     const dur = Math.max(3.2, Math.min(11, smooth.length / 55))
     const phase = seeded(edge.source_id + edge.target_id + String(edge.relation), 3)
-    // pull the chevron back so it kisses the target shape instead of stabbing it
     const back = pointTo(smooth.end, screenPoints[screenPoints.length - 2] || smooth.end, 8)
     return {
       key: `${edge.source_id}>${edge.target_id}#${edge.relation}`,
@@ -576,14 +576,14 @@ function routeEdges(edges, plan) {
       style
     }
   })
+
+  return rememberMemo(edgeRouteCache, routeKey, result)
 }
 
 // ── iso shape primitives ───────────────────────────────────────────────────
-// A box footprint spans ±ax/±ay grid units around the local origin (which sits
-// on the platform surface); h is its pixel height. Corners: A back, B right,
-// C front, D left; *t variants are the top face.
-
 function boxGeom(ax, ay, h, baseY = 0) {
+  const gKey = `${ax}:${ay}:${h}:${baseY}`
+  if (geometryCache.has(gKey)) return geometryCache.get(gKey)
   const raw = [
     [-ax, -ay],
     [ax, -ay],
@@ -601,7 +601,7 @@ function boxGeom(ax, ay, h, baseY = 0) {
   const Ct = up(C)
   const Dt = up(D)
   const path = (...pts) => `M ${pts.map(pt => `${r2(pt.x)} ${r2(pt.y)}`).join(' L ')} Z`
-  return {
+  return rememberMemo(geometryCache, gKey, {
     A, B, C, D, At, Bt, Ct, Dt,
     top: path(At, Bt, Ct, Dt),
     left: path(Dt, Ct, C, D),
@@ -611,28 +611,27 @@ function boxGeom(ax, ay, h, baseY = 0) {
     faceTop: [At, Bt, Ct, Dt],
     faceLeft: [Dt, Ct, C, D],
     faceRight: [Ct, Bt, B, C]
-  }
+  })
 }
 
 const lerp = (p1, p2, f) => ({ x: p1.x + (p2.x - p1.x) * f, y: p1.y + (p2.y - p1.y) * f })
 const along = (p1, p2, f) => `M ${r2(lerp(p1, p2, f).x)} ${r2(lerp(p1, p2, f).y)} L ${r2(lerp(p1, p2, 1 - f).x)} ${r2(lerp(p1, p2, 1 - f).y)}`
 
 // ── per-kind shape bodies (children of the .ia-lift group) ────────────────
-
-function RackBody({ node, geom, scene }) {
+function RackBody({ node, scene }) {
   const g = boxGeom(0.62, 0.3, 54)
   const units = [0.16, 0.32, 0.48, 0.64, 0.8].map(f => along(lerp(g.Bt, g.B, f), lerp(g.Ct, g.C, f), 0.04))
-  const leds = [0.2, 0.36, 0.52, 0.68].map((f, i) => lerp(lerp(g.Bt, g.B, 0.07), lerp(g.Ct, g.C, 0.07), f + 0.02))
+  const leds = [0.2, 0.36, 0.52, 0.68].map(f => lerp(lerp(g.Bt, g.B, 0.07), lerp(g.Ct, g.C, 0.07), f + 0.02))
   return [
-    jsx('path', { d: g.backL, className: 'ia-f-back' }),
-    jsx('path', { d: g.backR, className: 'ia-f-back' }),
-    jsx('path', { d: g.left, className: 'ia-f-left' }),
-    jsx('path', { d: g.right, className: 'ia-f-right' }),
-    jsx('path', { d: g.top, className: 'ia-f-top' }),
-    jsx('path', { d: along(g.At, g.Dt, 0.18), className: 'ia-detail' }),
-    jsx('path', { d: along(g.Bt, g.Ct, 0.18), className: 'ia-detail' }),
-    jsx('path', { d: units.join(' '), className: 'ia-groove' }),
-    jsx('path', { d: along(lerp(g.Dt, g.D, 0.5), lerp(g.Ct, g.C, 0.5), 0.48), className: 'ia-groove' }),
+    jsx('path', { d: g.backL, className: 'ia-f-back' }, 'bl'),
+    jsx('path', { d: g.backR, className: 'ia-f-back' }, 'br'),
+    jsx('path', { d: g.left, className: 'ia-f-left' }, 'l'),
+    jsx('path', { d: g.right, className: 'ia-f-right' }, 'r'),
+    jsx('path', { d: g.top, className: 'ia-f-top' }, 't'),
+    jsx('path', { d: along(g.At, g.Dt, 0.18), className: 'ia-detail' }, 'd1'),
+    jsx('path', { d: along(g.Bt, g.Ct, 0.18), className: 'ia-detail' }, 'd2'),
+    jsx('path', { d: units.join(' '), className: 'ia-groove' }, 'u'),
+    jsx('path', { d: along(lerp(g.Dt, g.D, 0.5), lerp(g.Ct, g.C, 0.5), 0.48), className: 'ia-groove' }, 'g'),
     ...leds.map((p, i) =>
       jsx('circle', {
         cx: r2(p.x),
@@ -645,7 +644,7 @@ function RackBody({ node, geom, scene }) {
   ]
 }
 
-function TowerBody({ node, geom, scene }) {
+function TowerBody({ node, scene }) {
   const base = boxGeom(0.46, 0.46, 6)
   const g = boxGeom(0.33, 0.33, 44, 6)
   const screen = [
@@ -658,24 +657,24 @@ function TowerBody({ node, geom, scene }) {
   const scanTop = lerp(screen[0], screen[1], 0.1)
   const scanBottom = lerp(screen[3], screen[2], 0.1)
   return [
-    jsx('path', { d: base.left, className: 'ia-f-left' }),
-    jsx('path', { d: base.right, className: 'ia-f-right' }),
-    jsx('path', { d: base.top, className: 'ia-f-top' }),
-    jsx('path', { d: g.left, className: 'ia-f-left' }),
-    jsx('path', { d: g.right, className: 'ia-f-right' }),
-    jsx('path', { d: g.top, className: 'ia-f-top' }),
-    jsx('path', { d: screenD, className: 'ia-screen', style: { stroke: scene.accent } }),
-    jsx('clipPath', { id: `ia-clip-${sid(node.id)}`, children: jsx('path', { d: screenD }) }),
+    jsx('path', { d: base.left, className: 'ia-f-left' }, 'bl'),
+    jsx('path', { d: base.right, className: 'ia-f-right' }, 'br'),
+    jsx('path', { d: base.top, className: 'ia-f-top' }, 'bt'),
+    jsx('path', { d: g.left, className: 'ia-f-left' }, 'l'),
+    jsx('path', { d: g.right, className: 'ia-f-right' }, 'r'),
+    jsx('path', { d: g.top, className: 'ia-f-top' }, 't'),
+    jsx('path', { d: screenD, className: 'ia-screen', style: { stroke: scene.accent } }, 'scr'),
+    jsx('clipPath', { id: `ia-clip-${sid(node.id)}`, children: jsx('path', { d: screenD }) }, 'clip'),
     jsx('line', {
       x1: r2(scanTop.x), y1: r2(scanTop.y), x2: r2(scanBottom.x), y2: r2(scanBottom.y),
       className: 'ia-scan', style: { animationDelay: `${(seeded(node.id, 7) * 2.8).toFixed(2)}s` },
       clipPath: `url(#ia-clip-${sid(node.id)})`
-    }),
-    jsx('circle', { cx: r2(lerp(g.At, g.Ct, 0.5).x), cy: r2(lerp(g.At, g.Ct, 0.5).y - 2), r: 1.6, style: { fill: scene.accent }, className: 'ia-blink' })
+    }, 'scan'),
+    jsx('circle', { cx: r2(lerp(g.At, g.Ct, 0.5).x), cy: r2(lerp(g.At, g.Ct, 0.5).y - 2), r: 1.6, style: { fill: scene.accent }, className: 'ia-blink' }, 'dot')
   ]
 }
 
-function TankBody({ node, geom, scene }) {
+function TankBody({ node, scene }) {
   const rx = 15
   const ry = 7.5
   const h = 34
@@ -685,9 +684,9 @@ function TankBody({ node, geom, scene }) {
   const liquid = `M ${-rx} ${r2(ySurface)} L ${-rx} 0 A ${rx} ${ry} 0 0 0 ${rx} 0 L ${rx} ${r2(ySurface)} A ${rx} ${ry} 0 0 1 ${-rx} ${r2(ySurface)} Z`
   const health = HEALTH_COLOR[node.health_status] || HEALTH_COLOR.unknown
   return [
-    jsx('clipPath', { id: `ia-clip-${sid(node.id)}`, children: jsx('path', { d: body }) }),
-    jsx('path', { d: body, className: 'ia-glass' }),
-    jsx('path', { d: liquid, style: { fill: health }, className: 'ia-liquid' }),
+    jsx('clipPath', { id: `ia-clip-${sid(node.id)}`, children: jsx('path', { d: body }) }, 'clip'),
+    jsx('path', { d: body, className: 'ia-glass' }, 'glass'),
+    jsx('path', { d: liquid, style: { fill: health }, className: 'ia-liquid' }, 'liq'),
     jsxs('g', {
       className: 'ia-slosh',
       style: { animationDelay: `${(seeded(node.id, 5) * 3).toFixed(2)}s` },
@@ -695,13 +694,13 @@ function TankBody({ node, geom, scene }) {
       children: [
         jsx('ellipse', { cx: 0, cy: r2(ySurface), rx, ry, style: { fill: health }, className: 'ia-meniscus' })
       ]
-    }),
-    jsx('ellipse', { cx: 0, cy: -h, rx, ry, className: 'ia-rim', style: { stroke: scene.accent } }),
-    jsx('ellipse', { cx: -rx * 0.3, cy: -h * 0.62, rx: 2.4, ry: 5, className: 'ia-glass-shine' })
+    }, 'slosh'),
+    jsx('ellipse', { cx: 0, cy: -h, rx, ry, className: 'ia-rim', style: { stroke: scene.accent } }, 'rim'),
+    jsx('ellipse', { cx: -rx * 0.3, cy: -h * 0.62, rx: 2.4, ry: 5, className: 'ia-glass-shine' }, 'shine')
   ]
 }
 
-function CargoBody({ node, geom, scene }) {
+function CargoBody({ scene }) {
   const g = boxGeom(0.9, 0.36, 25)
   const ridges = [0.14, 0.26, 0.38, 0.5, 0.62, 0.74, 0.86].map(f =>
     along(lerp(g.D, g.Dt, 0.12), lerp(g.C, g.Ct, 0.12), 1 - f - 0.07)
@@ -711,47 +710,47 @@ function CargoBody({ node, geom, scene }) {
       jsx('path', { d: g.left, className: 'ia-f-left' }),
       jsx('path', { d: g.right, className: 'ia-f-right' }),
       jsx('path', { d: g.top, className: 'ia-f-top' })
-    ] }),
-    jsx('path', { d: ridges.join(' '), className: 'ia-groove' }),
-    jsx('path', { d: along(g.Ct, g.Dt, 0.3), className: 'ia-groove' }),
+    ] }, 'hum'),
+    jsx('path', { d: ridges.join(' '), className: 'ia-groove' }, 'ridges'),
+    jsx('path', { d: along(g.Ct, g.Dt, 0.3), className: 'ia-groove' }, 'g1'),
     jsx('path', {
       d: `M ${r2(lerp(g.C, g.Ct, 0.18).x)} ${r2(lerp(g.C, g.Ct, 0.18).y)} L ${r2(lerp(g.B, g.Bt, 0.18).x)} ${r2(lerp(g.B, g.Bt, 0.18).y)} L ${r2(lerp(g.B, g.Bt, 0.82).x)} ${r2(lerp(g.B, g.Bt, 0.82).y)} L ${r2(lerp(g.C, g.Ct, 0.82).x)} ${r2(lerp(g.C, g.Ct, 0.82).y)} Z`,
       className: 'ia-door',
       style: { stroke: scene.accent }
-    }),
-    jsx('path', { d: along(lerp(g.C, g.Ct, 0.3), lerp(g.B, g.Bt, 0.3), 0.4), className: 'ia-groove' }),
-    jsx('path', { d: along(lerp(g.C, g.Ct, 0.7), lerp(g.B, g.Bt, 0.7), 0.4), className: 'ia-groove' })
+    }, 'door'),
+    jsx('path', { d: along(lerp(g.C, g.Ct, 0.3), lerp(g.B, g.Bt, 0.3), 0.4), className: 'ia-groove' }, 'g2'),
+    jsx('path', { d: along(lerp(g.C, g.Ct, 0.7), lerp(g.B, g.Bt, 0.7), 0.4), className: 'ia-groove' }, 'g3')
   ]
 }
 
-function PadBody({ node, geom, scene }) {
+function PadBody({ scene }) {
   const g = boxGeom(0.46, 0.46, 8)
   const top = lerp(g.At, g.Ct, 0.5)
   return [
-    jsx('path', { d: g.left, className: 'ia-f-left' }),
-    jsx('path', { d: g.right, className: 'ia-f-right' }),
-    jsx('path', { d: g.top, className: 'ia-f-top' }),
+    jsx('path', { d: g.left, className: 'ia-f-left' }, 'l'),
+    jsx('path', { d: g.right, className: 'ia-f-right' }, 'r'),
+    jsx('path', { d: g.top, className: 'ia-f-top' }, 't'),
     jsx('path', {
       d: `M ${r2(top.x)} ${r2(top.y - 6)} L ${r2(top.x + 8)} ${r2(top.y - 2)} L ${r2(top.x)} ${r2(top.y + 2)} L ${r2(top.x - 8)} ${r2(top.y - 2)} Z`,
       style: { stroke: scene.accent },
       className: 'ia-glyph'
-    }),
-    jsx('circle', { cx: r2(top.x), cy: r2(top.y - 2), r: 1.7, style: { fill: scene.accent }, className: 'ia-blink' })
+    }, 'glyph'),
+    jsx('circle', { cx: r2(top.x), cy: r2(top.y - 2), r: 1.7, style: { fill: scene.accent }, className: 'ia-blink' }, 'dot')
   ]
 }
 
-function PlateBody({ node, geom, scene }) {
+function PlateBody() {
   const g = boxGeom(0.7, 0.4, 6)
   return [
-    jsx('path', { d: g.left, className: 'ia-f-left' }),
-    jsx('path', { d: g.right, className: 'ia-f-right' }),
-    jsx('path', { d: g.top, className: 'ia-f-top' }),
-    jsx('path', { d: along(g.Dt, g.D, 0.4), className: 'ia-detail' }),
-    jsx('path', { d: along(lerp(g.Ct, g.C, 0.45), lerp(g.Bt, g.B, 0.45), 0.3), className: 'ia-detail' })
+    jsx('path', { d: g.left, className: 'ia-f-left' }, 'l'),
+    jsx('path', { d: g.right, className: 'ia-f-right' }, 'r'),
+    jsx('path', { d: g.top, className: 'ia-f-top' }, 't'),
+    jsx('path', { d: along(g.Dt, g.D, 0.4), className: 'ia-detail' }, 'd1'),
+    jsx('path', { d: along(lerp(g.Ct, g.C, 0.45), lerp(g.Bt, g.B, 0.45), 0.3), className: 'ia-detail' }, 'd2')
   ]
 }
 
-function BotBody({ node, geom, scene }) {
+function BotBody({ node, scene }) {
   const g = boxGeom(0.3, 0.3, 18, 24)
   const antennaBase = lerp(g.At, g.Ct, 0.5)
   return [
@@ -766,11 +765,11 @@ function BotBody({ node, geom, scene }) {
         jsx('line', { x1: r2(antennaBase.x), y1: r2(antennaBase.y - 1), x2: r2(antennaBase.x), y2: r2(antennaBase.y - 9), className: 'ia-detail' }),
         jsx('circle', { cx: r2(antennaBase.x), cy: r2(antennaBase.y - 10.5), r: 1.9, style: { fill: scene.accent }, className: 'ia-blink' })
       ]
-    })
+    }, 'bot')
   ]
 }
 
-function OrbBody({ node, geom, scene }) {
+function OrbBody({ node, scene }) {
   return [
     jsxs('g', {
       className: 'ia-bob ia-bob-slow',
@@ -784,18 +783,18 @@ function OrbBody({ node, geom, scene }) {
           jsx('animateMotion', { path: 'M 0 -24.2 A 15.5 5.2 0 1 0 0.05 -24.2 Z', dur: '5s', repeatCount: 'indefinite', calcMode: 'linear' })
         ] })
       ]
-    })
+    }, 'orb')
   ]
 }
 
-function ClockBody({ node, geom, scene }) {
+function ClockBody({ scene }) {
   const g = boxGeom(0.4, 0.4, 12)
   return [
-    jsx('path', { d: g.left, className: 'ia-f-left' }),
-    jsx('path', { d: g.right, className: 'ia-f-right' }),
-    jsx('path', { d: g.top, className: 'ia-f-top' }),
-    jsx('circle', { cx: 0, cy: -21, r: 11, className: 'ia-clock-face' }),
-    [0, 90, 180, 270].map(deg =>
+    jsx('path', { d: g.left, className: 'ia-f-left' }, 'l'),
+    jsx('path', { d: g.right, className: 'ia-f-right' }, 'r'),
+    jsx('path', { d: g.top, className: 'ia-f-top' }, 't'),
+    jsx('circle', { cx: 0, cy: -21, r: 11, className: 'ia-clock-face' }, 'face'),
+    ...[0, 90, 180, 270].map(deg =>
       jsx('circle', {
         cx: r2(Math.sin((deg * Math.PI) / 180) * 8.2),
         cy: r2(-21 - Math.cos((deg * Math.PI) / 180) * 8.2),
@@ -808,12 +807,12 @@ function ClockBody({ node, geom, scene }) {
         jsx('line', { x1: 0, y1: 2, x2: 0, y2: -8, style: { stroke: scene.accent }, className: 'ia-clock-hand' }),
         jsx('animateTransform', { attributeName: 'transform', type: 'rotate', from: '0', to: '360', dur: '8s', repeatCount: 'indefinite' })
       ] })
-    ] }),
-    jsx('circle', { cx: 0, cy: -21, r: 1.5, style: { fill: scene.accent } })
+    ] }, 'hand'),
+    jsx('circle', { cx: 0, cy: -21, r: 1.5, style: { fill: scene.accent } }, 'pin')
   ]
 }
 
-function BeaconBody({ node, geom, scene }) {
+function BeaconBody({ node, scene }) {
   const g = boxGeom(0.5, 0.5, 0)
   const apex = { x: (g.A.x + g.C.x) / 2, y: (g.A.y + g.C.y) / 2 - 38 }
   const face = (p1, p2) => `M ${r2(p1.x)} ${r2(p1.y)} L ${r2(p2.x)} ${r2(p2.y)} L ${r2(apex.x)} ${r2(apex.y)} Z`
@@ -823,13 +822,13 @@ function BeaconBody({ node, geom, scene }) {
     return `M ${r2(a.x)} ${r2(a.y)} L ${r2(b.x)} ${r2(b.y)}`
   }
   return [
-    jsx('path', { d: face(g.D, g.C), className: 'ia-f-left' }),
-    jsx('path', { d: face(g.C, g.B), className: 'ia-f-right' }),
-    jsx('path', { d: band(g.D, g.C, 0.55), className: 'ia-groove' }),
-    jsx('path', { d: band(g.C, g.B, 0.55), className: 'ia-groove' }),
-    jsx('circle', { cx: r2(apex.x), cy: r2(apex.y - 1), r: 2.3, style: { fill: scene.accent }, className: 'ia-blink' }),
-    jsx('ellipse', { cx: 0, cy: 1, rx: 18, ry: 9, className: 'ia-ping', style: { animationDelay: `${(seeded(node.id, 11) * 3).toFixed(2)}s`, stroke: scene.accent } }),
-    jsx('ellipse', { cx: 0, cy: 1, rx: 18, ry: 9, className: 'ia-ping', style: { animationDelay: `${(1.5 + seeded(node.id, 12) * 3).toFixed(2)}s`, stroke: scene.accent } })
+    jsx('path', { d: face(g.D, g.C), className: 'ia-f-left' }, 'l'),
+    jsx('path', { d: face(g.C, g.B), className: 'ia-f-right' }, 'r'),
+    jsx('path', { d: band(g.D, g.C, 0.55), className: 'ia-groove' }, 'b1'),
+    jsx('path', { d: band(g.C, g.B, 0.55), className: 'ia-groove' }, 'b2'),
+    jsx('circle', { cx: r2(apex.x), cy: r2(apex.y - 1), r: 2.3, style: { fill: scene.accent }, className: 'ia-blink' }, 'dot'),
+    jsx('ellipse', { cx: 0, cy: 1, rx: 18, ry: 9, className: 'ia-ping', style: { animationDelay: `${(seeded(node.id, 11) * 3).toFixed(2)}s`, stroke: scene.accent } }, 'p1'),
+    jsx('ellipse', { cx: 0, cy: 1, rx: 18, ry: 9, className: 'ia-ping', style: { animationDelay: `${(1.5 + seeded(node.id, 12) * 3).toFixed(2)}s`, stroke: scene.accent } }, 'p2')
   ]
 }
 
@@ -846,18 +845,27 @@ const SHAPE_BODIES = {
   beacon: BeaconBody
 }
 
-// ── node assembly: shadow, drift underglow, shape, beacon, chip, labels ────
-function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddress, onSelect }) {
+const pulseColor = kind =>
+  kind === 'touch_blocked'
+    ? 'var(--ui-danger, #ef4444)'
+    : kind === 'touch_allowed'
+      ? 'var(--ui-success, #10b981)'
+      : kind === 'touch_warned'
+        ? 'var(--ui-warning, #f59e0b)'
+        : 'var(--ui-info, #06b6d4)'
+
+const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddress, onSelect }) {
   const scene = kindScene(node.kind)
   const drift = node.drift_status || 'matched'
   const driftColor = DRIFT_COLOR[drift] || DRIFT_COLOR.matched
   const health = node.health_status || 'unknown'
   const body = (SHAPE_BODIES[scene.shape] || PadBody)({ node, scene })
-  const title = truncate(node.label || node.id, 14)
+  const cleanLabel = String(node.label || node.id).replace(/^cron:\s*/i, '')
+  const title = truncate(cleanLabel, 16)
   const sub = addressOf(node) || node.kind || ''
   const top = scene.top
   return jsxs('g', {
-    className: cn('ia-node', `ia-kind-${node.kind}`, active && 'ia-node-active', pulse && `ia-pulse-${pulse}`, fresh && 'ia-enter'),
+    className: cn('ia-node', `ia-kind-${node.kind}`, active && 'ia-node-active', !showTitle && 'ia-node-compact', pulse && `ia-pulse-${pulse}`, fresh && 'ia-enter'),
     transform: `translate(${r2(projX(info.gx + 0.5, info.gy + 0.5))} ${r2(projY(info.gx + 0.5, info.gy + 0.5, info.z || 0))})`,
     'data-node-id': node.id,
     onClick: event => {
@@ -866,7 +874,7 @@ function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddre
     },
     style: { '--mat': scene.mat, '--acc': scene.accent, '--d': `${delay}ms` },
     children: [
-      // crisp isometric diamonds — flat shadow plates, no soft blur
+      jsx('title', { children: `${node.label || node.id} (${node.kind}${sub ? ' · ' + sub : ''})` }),
       jsx('path', { d: `M 0 ${r2(2.5 - scene.shadow / 2)} L ${r2(scene.shadow)} 2.5 L 0 ${r2(2.5 + scene.shadow / 2)} L ${r2(-scene.shadow)} 2.5 Z`, className: 'ia-shadow' }),
       drift !== 'matched'
         ? jsx('path', { d: `M 0 ${r2(1.5 - scene.shadow * 0.46)} L ${r2(scene.shadow * 0.92)} 1.5 L 0 ${r2(1.5 + scene.shadow * 0.46)} L ${r2(-scene.shadow * 0.92)} 1.5 Z`, className: 'ia-dglow', style: { fill: driftColor } })
@@ -900,15 +908,13 @@ function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddre
         children: [
           ...body,
           jsx('circle', { cx: 0, cy: -top - 4, r: 2.5, className: cn('ia-beacon', `ia-beacon-${health}`), style: { fill: HEALTH_COLOR[health] || HEALTH_COLOR.unknown } }),
-          drift !== 'matched'
+          drift !== 'matched' && drift !== 'observed' && drift !== 'doc_only'
             ? jsxs('g', { className: 'ia-chipf', style: { animationDelay: `${(seeded(node.id, 21) * 3).toFixed(2)}s` }, children: [
                 jsx('rect', { x: -(DRIFT_LABEL[drift] || drift).length * 2.9 - 6, y: -(top + 48), width: (DRIFT_LABEL[drift] || drift).length * 5.8 + 12, height: 13, rx: 6.5, className: 'ia-chip-box', style: { stroke: driftColor } }),
                 jsx('text', { x: 0, y: -(top + 38.5), textAnchor: 'middle', className: 'ia-chip-text', style: { fill: driftColor }, children: DRIFT_LABEL[drift] || drift })
               ] })
             : null,
-          showTitle
-            ? jsx('text', { x: 0, y: -(top + 26), textAnchor: 'middle', className: 'ia-node-title', children: title })
-            : null,
+          jsx('text', { x: 0, y: -(top + 26), textAnchor: 'middle', className: 'ia-node-title', children: title }),
           showTitle && (showAddress || active)
             ? jsx('text', { x: 0, y: -(top + 15), textAnchor: 'middle', className: 'ia-node-sub2', children: node.vmid ? `${sub} · vm ${node.vmid}` : sub })
             : null
@@ -916,22 +922,334 @@ function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddre
       })
     ]
   })
+})
+
+const PlatformView = React.memo(function PlatformView({ platform, next }) {
+  const p = platform
+  const z = p.z
+  const A = { x: projX(p.L, p.P), y: projY(p.L, p.P, z) }
+  const B = { x: projX(p.L + p.W, p.P), y: projY(p.L + p.W, p.P, z) }
+  const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, z) }
+  const D = { x: projX(p.L, p.P + p.D), y: projY(p.L, p.P + p.D, z) }
+  const dz = 16 + ISO.stepZ
+  const face = (p1, p2, depth) =>
+    `M ${r2(p1.x)} ${r2(p1.y)} L ${r2(p2.x)} ${r2(p2.y)} L ${r2(p2.x)} ${r2(p2.y + depth)} L ${r2(p1.x)} ${r2(p1.y + depth)} Z`
+  const riser = next
+    ? `M ${r2(D.x)} ${r2(D.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(projX(next.L + next.W, next.P))} ${r2(projY(next.L + next.W, next.P, next.z))} L ${r2(projX(next.L, next.P))} ${r2(projY(next.L, next.P, next.z))} Z`
+    : null
+  let grid = ''
+  for (let gx = p.L + 1; gx < p.L + p.W; gx++) grid += `M ${r2(projX(gx, p.P))} ${r2(projY(gx, p.P, z))} L ${r2(projX(gx, p.P + p.D))} ${r2(projY(gx, p.P + p.D, z))} `
+  for (let gy = p.P + 1; gy < p.P + p.D; gy++) grid += `M ${r2(projX(p.L, gy))} ${r2(projY(p.L, gy, z))} L ${r2(projX(p.L + p.W, gy))} ${r2(projY(p.L + p.W, gy, z))} `
+  return jsxs('g', {
+    className: cn('ia-plat', `ia-plat-${p.t % 4}`),
+    style: { '--t': p.t, animationDelay: `${p.t * 110}ms` },
+    children: [
+      riser ? jsx('path', { d: riser, className: 'ia-plat-riser' }) : null,
+      jsx('path', { d: face(D, A, dz), className: 'ia-plat-left' }),
+      jsx('path', { d: face(A, B, dz), className: 'ia-plat-right' }),
+      jsx('path', { d: face(C, D, dz), className: 'ia-plat-left' }),
+      jsx('path', { d: face(B, C, dz), className: 'ia-plat-right' }),
+      jsx('path', { d: `M ${r2(A.x)} ${r2(A.y)} L ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)} Z`, className: 'ia-plat-top' }),
+      jsx('path', { d: grid, className: 'ia-plat-grid' }),
+      jsx('path', { d: `M ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)}`, className: 'ia-plat-edge' })
+    ]
+  })
+})
+
+const PlatformLabel = React.memo(function PlatformLabel({ platform }) {
+  const p = platform
+  const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, p.z) }
+  return jsx('text', {
+    x: 0,
+    y: 0,
+    textAnchor: 'end',
+    className: 'ia-plat-label',
+    transform: `translate(${r2(C.x - 12)} ${r2(C.y + 19)}) matrix(0.894 0.447 0 1 0 0)`,
+    children: STRATUM_NAME[p.stratum] || `TIER ${p.stratum}`
+  })
+})
+
+const EdgeView = React.memo(function EdgeView({ route, selectedId, pulseFor, labelHint }) {
+  const { edge, style } = route
+  const hot = Boolean(selectedId) && (edge.source_id === selectedId || edge.target_id === selectedId)
+  const dim = Boolean(selectedId) && !hot
+  const burst = pulseFor && (pulseFor(edge.source_id) === 'touch_blocked' || pulseFor(edge.target_id) === 'touch_blocked')
+  return jsxs('g', {
+    className: cn('ia-edge', `ia-edge-${edge.relation}`, hot && 'ia-edge-hot', dim && 'ia-edge-dim'),
+    style: { '--edge-c': style.color, '--ew': style.width, '--flow-dur': `${style.flow}s` },
+    children: [
+      jsx('path', { d: route.d, className: 'ia-edge-line', strokeDasharray: style.dash || undefined }),
+      jsx('path', {
+        d: 'M -1.4 -3.6 L 5.8 0 L -1.4 3.6 Z',
+        transform: `translate(${r2(route.chevron.x)} ${r2(route.chevron.y)}) rotate(${r2(route.angle)})`,
+        className: 'ia-edge-head'
+      }),
+      jsxs('g', { className: 'ia-packet', children: [
+        jsx('circle', { r: route.length > 430 ? 2.5 : 2, className: 'ia-packet-core' }),
+        jsx('circle', { r: 4.8, className: 'ia-packet-halo' }),
+        jsx('animateMotion', { path: route.d, dur: `${route.dur}s`, begin: `${(-route.phase * route.dur).toFixed(2)}s`, repeatCount: 'indefinite', calcMode: 'linear' })
+      ] }),
+      burst
+        ? [0, 1, 2].map(i =>
+            jsxs('g', { className: 'ia-burst', style: { animationDelay: `${i * 0.24}s` }, children: [
+              jsx('circle', { r: 3 }),
+              jsx('animateMotion', { path: route.d, dur: '1.7s', begin: `${(i * 0.22).toFixed(2)}s`, repeatCount: '3', calcMode: 'linear' })
+            ] }, `burst-${i}`))
+        : null,
+      jsx('path', { d: route.d, className: 'ia-edge-hit', children: jsx('title', { children: labelHint }) })
+    ]
+  })
+})
+
+function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom, offset, setOffset }) {
+  const plan = React.useMemo(() => planScene(nodes), [nodes])
+  const routed = React.useMemo(() => routeEdges(edges, plan), [edges, plan])
+  const dragRef = React.useRef(null)
+  const seenRef = React.useRef(null)
+
+  const viewBox = `${-offset.x} ${-offset.y} ${plan.width / zoom} ${plan.height / zoom}`
+
+  const onPointerDown = event => {
+    if (event.target && event.target.closest && event.target.closest('[data-node-id]')) return
+    dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y, moved: false }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  const onPointerMove = event => {
+    if (!dragRef.current) return
+    const rawDx = event.clientX - dragRef.current.x
+    const rawDy = event.clientY - dragRef.current.y
+    if (Math.hypot(rawDx, rawDy) > 4) dragRef.current.moved = true
+    const dx = rawDx / zoom
+    const dy = rawDy / zoom
+    setOffset({ x: dragRef.current.ox - dx, y: dragRef.current.oy - dy })
+  }
+  const onPointerUp = () => {
+    if (dragRef.current && !dragRef.current.moved && selectedId) {
+      onSelect(null)
+    }
+    dragRef.current = null
+  }
+  const onWheel = event => {
+    if (event.ctrlKey || event.metaKey || Math.abs(event.deltaY) > 0) {
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
+      setZoom(z => Math.min(2.6, Math.max(0.42, z * factor)))
+    }
+  }
+
+  const ordered = React.useMemo(() => {
+    const seen = seenRef.current || (seenRef.current = new Set())
+    return Array.from(plan.placed.values())
+      .sort((a, b) => a.u - b.u || a.gx - b.gx)
+      .map(info => {
+        const fresh = !seen.has(info.node.id)
+        seen.add(info.node.id)
+        return { info, fresh }
+      })
+  }, [plan])
+
+  const notable = node =>
+    (node.drift_status && node.drift_status !== 'matched' && node.drift_status !== 'observed' && node.drift_status !== 'doc_only') ||
+    node.health_status === 'down' ||
+    node.health_status === 'degraded'
+  const dense = nodes.length > 26 && zoom < 1.18
+  const primaryKind = node => ['server', 'vm', 'lxc', 'agent', 'model_endpoint'].includes(node.kind)
+  const showTitleFor = node =>
+    node.id === selectedId || notable(node) || (!dense ? zoom >= 0.78 : primaryKind(node))
+  const showAddress = zoom >= 1.25
+
+  const labelHintOf = route => {
+    const from = plan.placed.get(route.edge.source_id)
+    const to = plan.placed.get(route.edge.target_id)
+    return `${(from && from.node && from.node.label) || route.edge.source_id} —${route.edge.relation}→ ${(to && to.node && to.node.label) || route.edge.target_id}`
+  }
+
+  return jsx('div', {
+    className: 'ia-graph-wrap',
+    children: jsxs('svg', {
+      className: 'ia-svg',
+      viewBox,
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onPointerLeave: () => { dragRef.current = null },
+      onWheel,
+      children: [
+        jsxs('g', {
+          className: 'ia-iso',
+          transform: `translate(${r2(plan.origin.x)} ${r2(plan.origin.y)})`,
+          children: [
+            plan.platforms.map((p, i) => jsx(PlatformView, { platform: p, next: plan.platforms[i + 1] }, `plat-${p.t}`)),
+            plan.platforms.map(p => jsx(PlatformLabel, { platform: p }, `plat-label-${p.t}`)),
+            routed.map(route => jsx(EdgeView, { route, selectedId, pulseFor, labelHint: labelHintOf(route) }, route.key)),
+            ordered.map(({ info, fresh }) =>
+              jsx(IsoNode, {
+                node: info.node,
+                info,
+                active: info.node.id === selectedId,
+                pulse: pulseFor(info.node.id),
+                fresh,
+                delay: Math.min(920, info.u * 20),
+                showTitle: showTitleFor(info.node),
+                showAddress,
+                onSelect
+              }, info.node.id))
+          ]
+        })
+      ]
+    })
+  })
 }
 
-// ── page ───────────────────────────────────────────────────────────────────
+// ── glyphs & marks ─────────────────────────────────────────────────────────
+const IsoCubeMark = () =>
+  jsxs('svg', {
+    className: 'ia-mark',
+    width: 18,
+    height: 20,
+    viewBox: '-16 -11 32 32',
+    'aria-hidden': true,
+    children: [
+      jsx('path', { d: 'M 0 -10 L 15 -1 L 0 8 L -15 -1 Z', className: 'ia-mark-top' }),
+      jsx('path', { d: 'M -15 -1 L 0 8 L 0 20 L -15 11 Z', className: 'ia-mark-left' }),
+      jsx('path', { d: 'M 15 -1 L 0 8 L 0 20 L 15 11 Z', className: 'ia-mark-right' })
+    ]
+  })
+
+const LegendGlyph = React.memo(function LegendGlyph({ kind }) {
+  const scene = kindScene(kind)
+  const c = scene.accent
+  const m = scene.mat
+  const common = { fill: m, stroke: c, strokeWidth: 1 }
+  let inner
+  switch (scene.shape) {
+    case 'rack':
+      inner = [
+        jsx('rect', { x: 4, y: 1, width: 10, height: 12, ...common }, 'r'),
+        jsx('path', { d: 'M 6 4 H 12 M 6 7 H 12 M 6 10 H 12', stroke: c, strokeWidth: 1, fill: 'none', opacity: 0.8 }, 'p')
+      ]
+      break
+    case 'tower':
+      inner = [jsx('rect', { x: 6, y: 1, width: 6, height: 12, ...common }, 'r'), jsx('path', { d: 'M 7.5 4 H 10.5', stroke: c, fill: 'none' }, 'p')]
+      break
+    case 'tank':
+      inner = [
+        jsx('rect', { x: 5, y: 3, width: 8, height: 9, ...common }, 'r'),
+        jsx('ellipse', { cx: 9, cy: 3, rx: 4, ry: 1.6, fill: 'none', stroke: c }, 'e')
+      ]
+      break
+    case 'cargo':
+      inner = [
+        jsx('rect', { x: 1, y: 4, width: 16, height: 7, ...common }, 'r'),
+        jsx('path', { d: 'M 4.5 4 V 11 M 7.5 4 V 11 M 10.5 4 V 11 M 13.5 4 V 11', stroke: c, strokeWidth: 0.8, fill: 'none', opacity: 0.7 }, 'p')
+      ]
+      break
+    case 'plate':
+      inner = jsx('rect', { x: 2, y: 5, width: 14, height: 5, ...common })
+      break
+    case 'bot':
+      inner = [
+        jsx('rect', { x: 6, y: 5, width: 6, height: 7, ...common }, 'r'),
+        jsx('path', { d: 'M 9 5 V 2', stroke: c, fill: 'none' }, 'p'),
+        jsx('circle', { cx: 9, cy: 1.5, r: 1, fill: c }, 'c')
+      ]
+      break
+    case 'orb':
+      inner = [
+        jsx('circle', { cx: 9, cy: 7, r: 3.2, fill: c }, 'c'),
+        jsx('ellipse', { cx: 9, cy: 7, rx: 6.5, ry: 2.2, fill: 'none', stroke: c, opacity: 0.55 }, 'e')
+      ]
+      break
+    case 'clock':
+      inner = [
+        jsx('circle', { cx: 9, cy: 7, r: 4.6, fill: '#141d2c', stroke: c }, 'c'),
+        jsx('path', { d: 'M 9 7 V 3.6', stroke: c, strokeWidth: 1.2, fill: 'none' }, 'p')
+      ]
+      break
+    case 'beacon':
+      inner = jsx('path', { d: 'M 9 1.5 L 13.5 12.5 L 4.5 12.5 Z', ...common })
+      break
+    default:
+      inner = [jsx('rect', { x: 4, y: 4, width: 10, height: 6, ...common }, 'r'), jsx('path', { d: 'M 9 5.5 L 11 7 L 9 8.5 L 7 7 Z', fill: c }, 'p')]
+  }
+  return Array.isArray(inner)
+    ? jsxs('svg', { width: 18, height: 14, viewBox: '0 0 18 14', 'aria-hidden': true, children: inner })
+    : jsx('svg', { width: 18, height: 14, viewBox: '0 0 18 14', 'aria-hidden': true, children: inner })
+})
+
+const LEGEND_KINDS = [
+  ['server', 'Server'], ['vm', 'Virtual machine'], ['lxc', 'LXC container'], ['container', 'Container'],
+  ['service', 'Service'], ['project', 'Project'], ['agent', 'Hermes agent'], ['model_endpoint', 'Model endpoint'],
+  ['cron', 'Cron job'], ['peer', 'Tailnet peer']
+]
+const LEGEND_LINKS = [
+  ['hosts', 'Hosts'], ['depends_on', 'Depends on'], ['uses_model', 'Uses model'],
+  ['provides_model', 'Provides model'], ['monitors', 'Monitors'], ['proxies_to', 'Proxies to']
+]
+
+// ── page & floating chrome ─────────────────────────────────────────────────
+async function healNode(nodeId, setBusy, refetch) {
+  setBusy(`heal:${nodeId}`)
+  try {
+    const outcome = await rest('/heal', { method: 'POST', body: { node_id: nodeId } })
+    host.notify({
+      kind: outcome.ok ? 'info' : 'warning',
+      message: outcome.ok
+        ? `Healed ${nodeId} via ${outcome.command} (${outcome.status})`
+        : `${nodeId}: ${outcome.reason || outcome.detail || 'heal did not succeed'}`
+    })
+    await refetch()
+  } catch (err) {
+    host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
+  } finally {
+    setBusy('')
+  }
+}
+
+async function runWithBusy(setBusy, label, fn) {
+  setBusy(label)
+  try {
+    await fn()
+  } catch (err) {
+    host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
+  } finally {
+    setBusy('')
+  }
+}
+
 function InfraAtlasPage() {
   const [selectedId, setSelectedId] = React.useState(pendingSelect)
-  const [filter, setFilter] = React.useState('all')
+  const [filter, setFilter] = React.useState('active')
   const [search, setSearch] = React.useState('')
   const [activity, setActivity] = React.useState([])
   const [pulses, setPulses] = React.useState({})
   const [busy, setBusy] = React.useState('')
+  const [zoom, setZoom] = React.useState(1)
+  const [offset, setOffset] = React.useState({ x: 0, y: 0 })
+  const [policyOpen, setPolicyOpen] = React.useState(false)
+  const [legendOpen, setLegendOpen] = React.useState(false)
+  const [activityOpen, setActivityOpen] = React.useState(false)
 
   const { data, isLoading, error, refetch } = useGraph(10000)
 
   React.useEffect(() => {
     pendingSelect = null
   }, [])
+
+  React.useEffect(() => {
+    const onKey = event => {
+      if (event.key === 'Escape') {
+        if (policyOpen) setPolicyOpen(false)
+        else if (legendOpen) setLegendOpen(false)
+        else if (activityOpen) setActivityOpen(false)
+        else if (selectedId) setSelectedId(null)
+      }
+    }
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('keydown', onKey)
+      return () => window.removeEventListener('keydown', onKey)
+    }
+    return undefined
+  }, [policyOpen, legendOpen, activityOpen, selectedId])
 
   React.useEffect(() => {
     if (!API) return undefined
@@ -964,15 +1282,20 @@ function InfraAtlasPage() {
   const nodes = (data && data.nodes) || []
   const edges = (data && data.edges) || []
   const counts = (data && data.counts) || {}
+  const fleet = (data && data.fleet) || {}
   const incidents = (data && data.incidents) || []
   const config = (data && data.config) || {}
   const lastSweep = (data && data.last_sweep) || null
+  const sessionReads = (data && data.session_reads) || []
 
   const attentionCount = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
-  const otherCount = (counts.observed || 0) + (counts.doc_only || 0)
+  const activeCount = (counts.matched || 0) + attentionCount
 
   const visible = nodes.filter(node => {
-    if (filter !== 'all' && DRIFT_GROUP[node.drift_status] !== filter) return false
+    const group = DRIFT_GROUP[node.drift_status] || 'other'
+    if (filter === 'active' && group === 'other') return false
+    if (filter === 'matched' && group !== 'matched') return false
+    if (filter === 'attention' && group !== 'attention') return false
     if (!search.trim()) return true
     const needle = search.trim().toLowerCase()
     return [node.id, node.label, node.host_ip, node.tailnet_ip, node.systemd_unit, (node.ports || []).join(' ')]
@@ -980,43 +1303,27 @@ function InfraAtlasPage() {
       .some(value => String(value).toLowerCase().includes(needle))
   })
 
-  // from the fleet panel / rail: jump to a view, optionally pin a node open
-  const focusFleet = (key, nodeId) => {
-    setFilter(key)
-    if (nodeId) setSelectedId(nodeId)
-  }
+  // Fall back to all nodes when a small synthetic fleet has only doc_only/peer items
+  const displayNodes = visible.length || search.trim() || filter !== 'active' ? visible : nodes
 
-  const selected = visible.find(node => node.id === selectedId) || nodes.find(node => node.id === selectedId) || null
-
-  const runAction = async (label, fn) => {
-    setBusy(label)
-    try {
-      await fn()
-      await refetch()
-    } catch (err) {
-      host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
-    } finally {
-      setBusy('')
-    }
-  }
+  const selected = nodes.find(node => node.id === selectedId) || null
 
   const sweep = () =>
-    runAction('sweep', async () => {
+    runWithBusy(setBusy, 'sweep', async () => {
       const summary = await rest('/sweep', { method: 'POST', body: {} })
+      await refetch()
+      const attn = summary.counts ? summary.counts.changed + summary.counts.unregistered + summary.counts.stale : 0
       host.notify({
         kind: 'info',
-        message: `Sweep ${summary.sweep_id}: ${summary.counts ? summary.counts.matched : 0} matched, ${
-          summary.counts ? summary.counts.changed + summary.counts.unregistered + summary.counts.stale : 0
-        } need attention`
+        message: `Sweep #${summary.sweep_id} (${summary.duration_ms}ms): ${summary.counts ? summary.counts.matched : 0} matched${attn ? `, ${attn} need attention` : ''}`
       })
     })
 
   const toggleSetting = (key, value) =>
-    runAction(key, async () => {
-      // Persist through the public plugins RPC (the agent half reads the same settings),
-      // then ask the backend to reload the data source the toggle affects.
+    runWithBusy(setBusy, key, async () => {
       await host.request('plugins.manage', { action: 'settings', key: ID, values: { [key]: value } })
       await rest('/settings', { method: 'POST', body: { [key]: value } })
+      await refetch()
     })
 
   const nodePulse = nodeId => {
@@ -1026,406 +1333,396 @@ function InfraAtlasPage() {
     return pulse.kind
   }
 
+  const allActivity = activity.length ? activity : (data && data.activity) || []
+  const sweepAgo = ago(lastSweep && (lastSweep.ts || lastSweep.finished_at))
+  const guardrailMode = config.guardrail_mode || 'block'
+  const healMode = config.auto_heal_mode || 'auto'
+
   return jsxs('div', {
     className: 'ia-root',
     children: [
       jsx('style', { children: CSS }),
+
+      // 1. Full-bleed Isometric Canvas
       jsxs('div', {
-        className: 'ia-header',
+        className: 'ia-canvas',
+        children: [
+          error
+            ? jsx('div', { className: 'ia-empty', children: `Could not load infrastructure graph: ${error.message || error}` })
+            : isLoading && !nodes.length
+              ? jsx('div', { className: 'ia-empty', children: 'Loading infrastructure topology…' })
+              : displayNodes.length
+                ? jsx(Topology, {
+                    nodes: displayNodes,
+                    edges,
+                    selectedId,
+                    onSelect: setSelectedId,
+                    pulseFor: nodePulse,
+                    zoom,
+                    setZoom,
+                    offset,
+                    setOffset
+                  })
+                : jsx('div', {
+                    className: 'ia-empty',
+                    children: jsxs('div', {
+                      className: 'ia-empty-box',
+                      children: [
+                        jsx('div', { className: 'ia-empty-title', children: 'No matching nodes in this view' }),
+                        jsx('div', { className: 'ia-muted', children: 'Switch filter segments above or clear the search query.' }),
+                        jsx('button', {
+                          type: 'button',
+                          className: 'ia-btn',
+                          onClick: () => {
+                            setFilter('all')
+                            setSearch('')
+                          },
+                          children: 'Show all nodes'
+                        })
+                      ]
+                    })
+                  })
+        ]
+      }),
+
+      // 2. Unified Floating Top Bar
+      jsxs('header', {
+        className: 'ia-topbar ia-glass',
         children: [
           jsxs('div', {
-            className: 'ia-title',
+            className: 'ia-brand',
             children: [
               jsx(IsoCubeMark, {}),
-              jsx('span', { children: 'Infra Atlas' }),
-              jsx('span', { className: 'ia-sub', children: config.registry_path || '' })
+              jsxs('div', {
+                className: 'ia-brand-text',
+                children: [
+                  jsx('span', { className: 'ia-brand-title', children: 'Infra Atlas' }),
+                  jsxs('span', {
+                    className: 'ia-brand-meta',
+                    children: [
+                      fleet.avg_uptime_24h_pct !== undefined && fleet.avg_uptime_24h_pct !== null
+                        ? `${pct(fleet.avg_uptime_24h_pct)} 24h`
+                        : `${counts.matched || 0} healthy`,
+                      ' · ',
+                      `swept ${sweepAgo}`
+                    ]
+                  })
+                ]
+              })
             ]
           }),
-          jsxs('div', {
-            className: 'ia-controls',
+
+          jsxs('nav', {
+            className: 'ia-seg',
+            'aria-label': 'Filter topology nodes',
             children: [
-              jsx('input', {
-                className: 'ia-search',
-                placeholder: 'Search nodes, IPs, ports…',
-                value: search,
-                onChange: event => setSearch(event.target.value)
+              segButton('active', 'Live', activeCount, filter, setFilter),
+              segButton('attention', 'Alerts', attentionCount, filter, setFilter, attentionCount > 0 ? 'warn' : ''),
+              segButton('matched', 'Synced', counts.matched || 0, filter, setFilter),
+              segButton('all', 'All', counts.total || 0, filter, setFilter)
+            ]
+          }),
+
+          jsxs('div', {
+            className: 'ia-actions',
+            children: [
+              jsxs('div', {
+                className: 'ia-search-wrap',
+                children: [
+                  jsx('span', { className: 'ia-search-icon', 'aria-hidden': true, children: '⌕' }),
+                  jsx('input', {
+                    className: 'ia-search',
+                    placeholder: 'Search fleet…',
+                    value: search,
+                    onChange: event => setSearch(event.target.value)
+                  }),
+                  search
+                    ? jsx('button', {
+                        type: 'button',
+                        className: 'ia-search-clear',
+                        title: 'Clear search',
+                        onClick: () => setSearch(''),
+                        children: '✕'
+                      })
+                    : null
+                ]
               }),
-              select('Guardrail', config.guardrail_mode, ['block', 'warn', 'off'], value =>
-                toggleSetting('guardrail_mode', value)
-              ),
-              select('Auto-heal', config.auto_heal_mode, ['auto', 'playbook_only', 'notify_only', 'off'], value =>
-                toggleSetting('auto_heal_mode', value)
-              ),
-              jsx('button', {
-                type: 'button',
-                className: cn('ia-btn', config.demo_mode && 'ia-btn-on'),
-                onClick: () => toggleSetting('demo_mode', !config.demo_mode),
-                children: config.demo_mode ? 'Demo fleet' : 'Live fleet'
+
+              jsxs('div', {
+                className: 'ia-pop-anchor',
+                children: [
+                  jsxs('button', {
+                    type: 'button',
+                    className: cn('ia-btn ia-btn-ghost', policyOpen && 'ia-btn-active'),
+                    title: 'Configure guardrail & downtime response policies',
+                    onClick: () => {
+                      setPolicyOpen(o => !o)
+                      setLegendOpen(false)
+                    },
+                    children: [
+                      jsx('span', {
+                        className: 'ia-dot',
+                        style: {
+                          background:
+                            guardrailMode === 'block'
+                              ? 'var(--ui-success, #10b981)'
+                              : guardrailMode === 'warn'
+                                ? 'var(--ui-warning, #f59e0b)'
+                                : 'var(--ui-text-quaternary, #6b7280)'
+                        }
+                      }),
+                      `Guard: ${guardrailMode}`
+                    ]
+                  }),
+                  policyOpen
+                    ? jsxs('div', {
+                        className: 'ia-popover ia-glass',
+                        children: [
+                          jsx('div', { className: 'ia-pop-title', children: 'Read-Before-Touch Guardrail' }),
+                          jsx('div', {
+                            className: 'ia-pop-desc',
+                            children: 'Requires sessions to read a node’s registry entry before running terminal or file mutations on it.'
+                          }),
+                          jsxs('div', {
+                            className: 'ia-choice-row',
+                            children: ['block', 'warn', 'off'].map(mode =>
+                              jsx('button', {
+                                type: 'button',
+                                className: cn('ia-choice', guardrailMode === mode && 'ia-choice-on'),
+                                onClick: () => toggleSetting('guardrail_mode', mode),
+                                children: mode
+                              }, mode)
+                            )
+                          }),
+                          jsx('div', { className: 'ia-pop-sep' }),
+                          jsx('div', { className: 'ia-pop-title', children: 'Autonomous Downtime Response' }),
+                          jsx('div', {
+                            className: 'ia-pop-desc',
+                            children: 'Controls whether failed probes run the local restart playbook and wake the agent.'
+                          }),
+                          jsxs('div', {
+                            className: 'ia-choice-row',
+                            children: [
+                              ['auto', 'Auto'],
+                              ['playbook_only', 'Playbook'],
+                              ['notify_only', 'Notify'],
+                              ['off', 'Off']
+                            ].map(([mode, label]) =>
+                              jsx('button', {
+                                type: 'button',
+                                className: cn('ia-choice', healMode === mode && 'ia-choice-on'),
+                                onClick: () => toggleSetting('auto_heal_mode', mode),
+                                children: label
+                              }, mode)
+                            )
+                          }),
+                          config.registry_path
+                            ? jsxs('div', {
+                                className: 'ia-pop-foot',
+                                children: ['Registry: ', jsx('code', { children: config.registry_path })]
+                              })
+                            : null
+                        ]
+                      })
+                    : null
+                ]
               }),
+
               jsx('button', {
                 type: 'button',
                 className: 'ia-btn ia-btn-primary',
                 disabled: busy === 'sweep',
                 onClick: sweep,
-                children: busy === 'sweep' ? 'Sweeping…' : '↻ Sweep now'
+                children: busy === 'sweep' ? 'Sweeping…' : '↻ Sweep'
               })
             ]
           })
         ]
       }),
 
+      // 3. Floating Incident Banner (only when an outage is active)
+      incidents.length
+        ? jsx(IncidentBanner, {
+            incidents,
+            shifted: Boolean(selected),
+            onInspect: nodeId => setSelectedId(nodeId),
+            onHeal: nodeId => healNode(nodeId, setBusy, refetch)
+          })
+        : null,
+
+      // 4. Bottom-Left Collapsible Activity Dock
+      jsx(ActivityDock, {
+        entries: allActivity,
+        open: activityOpen,
+        setOpen: setActivityOpen,
+        compact: Boolean(selected),
+        onSelectNode: nodeId => {
+          if (nodeId) setSelectedId(nodeId)
+        }
+      }),
+
+      // 5. Bottom-Right Unified Map Controls & Legend
       jsxs('div', {
-        className: 'ia-rail',
+        className: cn('ia-map-dock', selected && 'ia-map-dock-shifted'),
         children: [
-          jsx('span', { className: 'ia-rail-label', children: 'View' }),
-          pill('all', `All ${counts.total || 0}`, filter, setFilter),
-          pill('matched', `Matched ${counts.matched || 0}`, filter, setFilter, '#34d399'),
-          pill('attention', `Attention ${attentionCount}`, filter, setFilter, '#fbbf24'),
-          pill('other', `Docs & peers ${otherCount}`, filter, setFilter, '#9fb0cc'),
-          jsx('span', { className: 'ia-rail-spacer' }),
-          jsx('span', {
-            className: 'ia-rail-info',
-            children: `${counts.total || 0} nodes · last sweep ${ago(lastSweep && lastSweep.finished_at)}`
+          legendOpen
+            ? jsxs('div', {
+                className: 'ia-legend-card ia-glass',
+                children: [
+                  jsxs('div', {
+                    className: 'ia-legend-head',
+                    children: [
+                      jsx('span', { className: 'ia-pop-title', children: 'Topology Legend' }),
+                      jsx('button', { type: 'button', className: 'ia-icon-btn', onClick: () => setLegendOpen(false), children: '✕' })
+                    ]
+                  }),
+                  jsx('div', { className: 'ia-legend-sub', children: '3D Node Silhouettes' }),
+                  jsx('div', {
+                    className: 'ia-legend-grid',
+                    children: LEGEND_KINDS.map(([kind, label]) =>
+                      jsxs('div', {
+                        className: 'ia-legend-row',
+                        children: [jsx(LegendGlyph, { kind }), jsx('span', { children: label })]
+                      }, kind)
+                    )
+                  }),
+                  jsx('div', { className: 'ia-legend-sub', children: 'Dependency Traces' }),
+                  jsx('div', {
+                    className: 'ia-legend-grid',
+                    children: LEGEND_LINKS.map(([rel, label]) => {
+                      const style = relationStyle(rel)
+                      return jsxs('div', {
+                        className: 'ia-legend-row',
+                        children: [
+                          jsx('svg', {
+                            width: 18,
+                            height: 14,
+                            'aria-hidden': true,
+                            children: jsx('line', {
+                              x1: 1,
+                              y1: 7,
+                              x2: 17,
+                              y2: 7,
+                              stroke: style.color,
+                              strokeWidth: 2,
+                              strokeDasharray: style.dash || undefined
+                            })
+                          }),
+                          jsx('span', { children: label })
+                        ]
+                      }, rel)
+                    })
+                  })
+                ]
+              })
+            : null,
+          jsxs('div', {
+            className: 'ia-map-bar ia-glass',
+            children: [
+              jsx('button', {
+                type: 'button',
+                className: 'ia-map-btn',
+                title: 'Zoom out',
+                onClick: () => setZoom(z => Math.max(0.42, z / 1.2)),
+                children: '−'
+              }),
+              jsx('button', {
+                type: 'button',
+                className: 'ia-map-btn ia-map-pct',
+                title: 'Reset zoom & pan',
+                onClick: () => {
+                  setZoom(1)
+                  setOffset({ x: 0, y: 0 })
+                },
+                children: `${Math.round(zoom * 100)}%`
+              }),
+              jsx('button', {
+                type: 'button',
+                className: 'ia-map-btn',
+                title: 'Zoom in',
+                onClick: () => setZoom(z => Math.min(2.6, z * 1.2)),
+                children: '+'
+              }),
+              jsx('span', { className: 'ia-map-sep' }),
+              jsx('button', {
+                type: 'button',
+                className: cn('ia-map-btn ia-map-legend', legendOpen && 'ia-btn-active'),
+                title: 'Toggle shape & link legend',
+                onClick: () => {
+                  setLegendOpen(o => !o)
+                  setPolicyOpen(false)
+                },
+                children: '? Legend'
+              })
+            ]
           })
         ]
       }),
 
-      incidents.length ? IncidentStrip({ incidents, onHeal: nodeId => healNode(nodeId, setBusy, refetch) }) : null,
-
-      jsxs('div', {
-        className: 'ia-body',
-        children: [
-          jsxs('div', {
-            className: 'ia-canvas',
-            children: [
-              error
-                ? jsx('div', { className: 'ia-empty', children: `Could not load the graph: ${error.message || error}` })
-                : isLoading && !nodes.length
-                  ? jsx('div', { className: 'ia-empty', children: 'Loading infrastructure graph…' })
-                  : nodes.length
-                    ? visible.length
-                      ? jsx(Topology, { nodes: visible, edges, selectedId, onSelect: setSelectedId, pulseFor: nodePulse })
-                      : jsx('div', {
-                          className: 'ia-empty',
-                          children: 'Nothing matches this view — pick another category above or clear the search to see the whole fleet.'
-                        })
-                    : jsx('div', {
-                        className: 'ia-empty',
-                        children:
-                          'No nodes yet. Run a sweep, or switch on the demo fleet to see the graph populated with a sanitized fleet.'
-                      }),
-              nodes.length && !error ? jsx(Legend, {}) : null
-            ]
-          }),
-          jsx(Inspector, {
+      // 6. Slide-Over Node Inspector Drawer (only open when a node is selected)
+      selected
+        ? jsx(InspectorDrawer, {
             node: selected,
             busy,
-            onClose: () => setSelectedId(null),
-            onRefetch: refetch,
             setBusy,
-            guardrail: config.guardrail_mode,
-            counts,
-            fleetIncidents: incidents,
-            lastSweep,
-            onFocus: focusFleet
+            onClose: () => setSelectedId(null),
+            onSelectNode: nodeId => setSelectedId(nodeId),
+            onRefetch: refetch,
+            guardrail: guardrailMode,
+            sessionReads
           })
-        ]
-      }),
-
-      jsx(ActivityStream, { entries: activity.length ? activity : (data && data.activity) || [], incidents })
+        : null
     ]
   })
 }
 
-function pill(key, label, active, setActive, color) {
-  return jsx('button', {
+function segButton(key, label, count, active, setActive, tone = '') {
+  return jsxs('button', {
     type: 'button',
-    className: cn('ia-pill', active === key && 'ia-pill-active'),
-    style: color && active === key ? { color, boxShadow: `inset 0 0 0 1px ${color}` } : undefined,
-    onClick: () => setActive(active === key ? 'all' : key),
-    children: label
-  })
-}
-
-function select(label, value, options, onChange) {
-  return jsxs('label', {
-    className: 'ia-select',
+    className: cn('ia-seg-btn', active === key && 'ia-seg-active', tone && `ia-seg-${tone}`),
+    onClick: () => setActive(key),
     children: [
       jsx('span', { children: label }),
-      jsx('select', {
-        value: value || options[0],
-        onChange: event => onChange(event.target.value),
-        children: options.map(option => jsx('option', { value: option, children: option }, option))
-      })
+      jsx('span', { className: 'ia-seg-count', children: String(count) })
     ]
   })
 }
 
-// ── chrome primitives ──────────────────────────────────────────────────────
-// HUD frame: hairline border + chamfered corners, for the floating cards.
-const hud = (className, children) => {
-  const inner = Array.isArray(children)
-    ? jsxs('div', { className: 'ia-hud-in', children })
-    : jsx('div', { className: 'ia-hud-in', children })
-  return jsx('div', { className: cn('ia-hud', className), children: inner })
-}
-
-const IsoCubeMark = () =>
-  jsxs('svg', {
-    className: 'ia-mark',
-    width: 15,
-    height: 17,
-    viewBox: '-16 -11 32 32',
-    'aria-hidden': true,
-    children: [
-      jsx('path', { d: 'M 0 -10 L 15 -1 L 0 8 L -15 -1 Z', className: 'ia-mark-top' }),
-      jsx('path', { d: 'M -15 -1 L 0 8 L 0 20 L -15 11 Z', className: 'ia-mark-left' }),
-      jsx('path', { d: 'M 15 -1 L 0 8 L 0 20 L 15 11 Z', className: 'ia-mark-right' })
-    ]
-  })
-
-// ── topology ───────────────────────────────────────────────────────────────
-function PlatformView({ platform, next }) {
-  const p = platform
-  const z = p.z
-  const A = { x: projX(p.L, p.P), y: projY(p.L, p.P, z) }
-  const B = { x: projX(p.L + p.W, p.P), y: projY(p.L + p.W, p.P, z) }
-  const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, z) }
-  const D = { x: projX(p.L, p.P + p.D), y: projY(p.L, p.P + p.D, z) }
-  // every slab is the same thickness: one joint row plus one level drop, so
-  // each cliff meets the next terrace's top edge exactly
-  const dz = 16 + ISO.stepZ
-  const face = (p1, p2, depth) =>
-    `M ${r2(p1.x)} ${r2(p1.y)} L ${r2(p2.x)} ${r2(p2.y)} L ${r2(p2.x)} ${r2(p2.y + depth)} L ${r2(p1.x)} ${r2(p1.y + depth)} Z`
-  // backstop seam filler under the cliff, fusing the terraces together
-  const riser = next
-    ? `M ${r2(D.x)} ${r2(D.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(projX(next.L + next.W, next.P))} ${r2(projY(next.L + next.W, next.P, next.z))} L ${r2(projX(next.L, next.P))} ${r2(projY(next.L, next.P, next.z))} Z`
-    : null
-  let grid = ''
-  for (let gx = p.L + 1; gx < p.L + p.W; gx++) grid += `M ${r2(projX(gx, p.P))} ${r2(projY(gx, p.P, z))} L ${r2(projX(gx, p.P + p.D))} ${r2(projY(gx, p.P + p.D, z))} `
-  for (let gy = p.P + 1; gy < p.P + p.D; gy++) grid += `M ${r2(projX(p.L, gy))} ${r2(projY(p.L, gy, z))} L ${r2(projX(p.L + p.W, gy))} ${r2(projY(p.L + p.W, gy, z))} `
-  return jsxs('g', {
-    className: cn('ia-plat', `ia-plat-${p.t % 4}`),
-    style: { '--t': p.t, animationDelay: `${p.t * 110}ms` },
-    children: [
-      riser ? jsx('path', { d: riser, className: 'ia-plat-riser' }) : null,
-      jsx('path', { d: face(D, A, dz), className: 'ia-plat-left' }),
-      jsx('path', { d: face(A, B, dz), className: 'ia-plat-right' }),
-      jsx('path', { d: face(C, D, dz), className: 'ia-plat-left' }),
-      jsx('path', { d: face(B, C, dz), className: 'ia-plat-right' }),
-      jsx('path', { d: `M ${r2(A.x)} ${r2(A.y)} L ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)} Z`, className: 'ia-plat-top' }),
-      jsx('path', { d: grid, className: 'ia-plat-grid' }),
-      jsx('path', { d: `M ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)}`, className: 'ia-plat-edge' })
-    ]
-  })
-}
-
-// stratum labels ride the right end of each terrace's front face; they render
-// after every platform so a lower terrace can never paint over them
-function PlatformLabel({ platform }) {
-  const p = platform
-  const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, p.z) }
-  return jsx('text', {
-    x: 0,
-    y: 0,
-    textAnchor: 'end',
-    className: 'ia-plat-label',
-    transform: `translate(${r2(C.x - 12)} ${r2(C.y + 19)}) matrix(0.894 0.447 0 1 0 0)`,
-    children: STRATUM_NAME[p.stratum] || `TIER ${p.stratum}`
-  })
-}
-
-function EdgeView({ route, selectedId, pulseFor, labelHint }) {
-  const { edge, style } = route
-  const hot = Boolean(selectedId) && (edge.source_id === selectedId || edge.target_id === selectedId)
-  const dim = Boolean(selectedId) && !hot
-  const burst = pulseFor && (pulseFor(edge.source_id) === 'touch_blocked' || pulseFor(edge.target_id) === 'touch_blocked')
-  return jsxs('g', {
-    className: cn('ia-edge', `ia-edge-${edge.relation}`, hot && 'ia-edge-hot', dim && 'ia-edge-dim'),
-    style: { '--edge-c': style.color, '--ew': style.width, '--flow-dur': `${style.flow}s` },
-    children: [
-      jsx('path', { d: route.d, className: 'ia-edge-line', strokeDasharray: style.dash || undefined }),
-      jsx('path', {
-        d: 'M -1.4 -3.6 L 5.8 0 L -1.4 3.6 Z',
-        transform: `translate(${r2(route.chevron.x)} ${r2(route.chevron.y)}) rotate(${r2(route.angle)})`,
-        className: 'ia-edge-head'
-      }),
-      jsxs('g', { className: 'ia-packet', children: [
-        jsx('circle', { r: route.length > 430 ? 2.5 : 2, className: 'ia-packet-core' }),
-        jsx('circle', { r: 4.8, className: 'ia-packet-halo' }),
-        jsx('animateMotion', { path: route.d, dur: `${route.dur}s`, begin: `${(-route.phase * route.dur).toFixed(2)}s`, repeatCount: 'indefinite', calcMode: 'linear' })
-      ] }),
-      burst
-        ? [0, 1, 2].map(i =>
-            jsxs('g', { className: 'ia-burst', style: { animationDelay: `${i * 0.24}s` }, children: [
-              jsx('circle', { r: 3 }),
-              jsx('animateMotion', { path: route.d, dur: '1.7s', begin: `${(i * 0.22).toFixed(2)}s`, repeatCount: '3', calcMode: 'linear' })
-            ] }, `burst-${i}`))
-        : null,
-      jsx('path', { d: route.d, className: 'ia-edge-hit', children: jsx('title', { children: labelHint }) })
-    ]
-  })
-}
-
-function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
-  const plan = React.useMemo(() => planScene(nodes), [nodes])
-  const routed = React.useMemo(() => routeEdges(edges, plan), [edges, plan])
-  const [zoom, setZoom] = React.useState(1)
-  const [offset, setOffset] = React.useState({ x: 0, y: 0 })
-  const dragRef = React.useRef(null)
-  const seenRef = React.useRef(null)
-
-  const viewBox = `${-offset.x} ${-offset.y} ${plan.width / zoom} ${plan.height / zoom}`
-
-  const onPointerDown = event => {
-    if (event.target && event.target.closest && event.target.closest('[data-node-id]')) return
-    dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y }
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-  }
-  const onPointerMove = event => {
-    if (!dragRef.current) return
-    const dx = (event.clientX - dragRef.current.x) / zoom
-    const dy = (event.clientY - dragRef.current.y) / zoom
-    setOffset({ x: dragRef.current.ox - dx, y: dragRef.current.oy - dy })
-  }
-  const onPointerUp = () => {
-    dragRef.current = null
-  }
-
-  // depth order (painter's algorithm); new ids get the drop-in entrance
-  const ordered = React.useMemo(() => {
-    const seen = seenRef.current || (seenRef.current = new Set())
-    const list = Array.from(plan.placed.values())
-      .sort((a, b) => a.u - b.u || a.gx - b.gx)
-      .map(info => {
-        const fresh = !seen.has(info.node.id)
-        seen.add(info.node.id)
-        return { info, fresh }
-      })
-    return list
-  }, [plan])
-
-  const notable = node =>
-    (node.drift_status && node.drift_status !== 'matched') ||
-    node.health_status === 'down' ||
-    node.health_status === 'degraded'
-  const showTitle = zoom >= 0.8
-  const showAddress = zoom >= 1.25
-
-  const labelHintOf = route => {
-    const from = plan.placed.get(route.edge.source_id)
-    const to = plan.placed.get(route.edge.target_id)
-    return `${(from && from.node && from.node.label) || route.edge.source_id} —${route.edge.relation}→ ${(to && to.node && to.node.label) || route.edge.target_id}`
-  }
-
-  return jsxs('div', {
-    className: 'ia-graph-wrap',
-    children: [
-      jsxs('div', {
-        className: 'ia-zoom',
-        children: [
-          jsx('button', { type: 'button', title: 'Zoom in', onClick: () => setZoom(z => Math.min(2.4, z * 1.2)), children: '+' }),
-          jsx('button', { type: 'button', title: 'Zoom out', onClick: () => setZoom(z => Math.max(0.42, z / 1.2)), children: '−' }),
-          jsx('button', {
-            type: 'button',
-            title: 'Reset view',
-            onClick: () => {
-              setZoom(1)
-              setOffset({ x: 0, y: 0 })
-            },
-            children: '⤢'
-          })
-        ]
-      }),
-      jsxs('svg', {
-        className: 'ia-svg',
-        viewBox,
-        onPointerDown,
-        onPointerMove,
-        onPointerUp,
-        onPointerLeave: onPointerUp,
-        children: [
-          jsxs('g', {
-            className: 'ia-iso',
-            transform: `translate(${r2(plan.origin.x)} ${r2(plan.origin.y)})`,
-            children: [
-              plan.platforms.map((p, i) => jsx(PlatformView, { platform: p, next: plan.platforms[i + 1] }, `plat-${p.t}`)),
-              plan.platforms.map(p => jsx(PlatformLabel, { platform: p }, `plat-label-${p.t}`)),
-              routed.map(route => jsx(EdgeView, { route, selectedId, pulseFor, labelHint: labelHintOf(route) }, route.key)),
-              ordered.map(({ info, fresh }) =>
-                jsx(IsoNode, {
-                  node: info.node,
-                  info,
-                  active: info.node.id === selectedId,
-                  pulse: pulseFor(info.node.id),
-                  fresh,
-                  delay: Math.min(920, info.u * 20),
-                  showTitle: showTitle || notable(info.node) || info.node.id === selectedId,
-                  showAddress,
-                  onSelect
-                }, info.node.id))
-            ]
-          })
-        ]
-      })
-    ]
-  })
-}
-
-const pulseColor = kind =>
-  kind === 'touch_blocked'
-    ? 'var(--ui-danger, #ef4444)'
-    : kind === 'touch_allowed'
-      ? 'var(--ui-success, #10b981)'
-      : kind === 'touch_warned'
-        ? 'var(--ui-warning, #f59e0b)'
-        : 'var(--ui-info, #06b6d4)'
-
-const truncate = (text, limit) => {
-  const value = String(text || '')
-  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value
-}
-
-// ── incident strip ─────────────────────────────────────────────────────────
-function IncidentStrip({ incidents, onHeal }) {
+function IncidentBanner({ incidents, shifted, onInspect, onHeal }) {
   const primary = incidents[0]
   if (!primary) return null
   return jsxs('div', {
-    className: 'ia-incident',
+    className: cn('ia-incident-banner ia-glass', shifted && 'ia-incident-shifted'),
     children: [
-      jsx('span', { className: 'ia-incident-icon', children: '🚨' }),
+      jsx('span', { className: 'ia-incident-pulse' }),
       jsxs('div', {
-        className: 'ia-incident-body',
+        className: 'ia-incident-info',
         children: [
           jsxs('div', {
-            className: 'ia-incident-title',
+            className: 'ia-incident-line',
             children: [
-              jsx('strong', { children: `Incident #${primary.id}: ${primary.node_label}` }),
-              jsx('span', { className: 'ia-incident-state', children: primary.status }),
-              incidents.length > 1 ? jsx('span', { className: 'ia-incident-more', children: `+${incidents.length - 1} more` }) : null
+              jsx('strong', { children: `Incident #${primary.id} · ${primary.node_label || primary.node_id}` }),
+              jsx('span', { className: 'ia-badge ia-badge-danger', children: primary.status }),
+              incidents.length > 1 ? jsx('span', { className: 'ia-muted', children: `+${incidents.length - 1} more` }) : null
             ]
           }),
-          jsx('div', { className: 'ia-incident-detail', children: primary.trigger_error || '' }),
-          primary.root_cause_hint ? jsx('div', { className: 'ia-incident-hint', children: primary.root_cause_hint }) : null
+          jsx('div', { className: 'ia-incident-err', children: primary.trigger_error || 'Endpoint failed health checks' })
         ]
       }),
       jsxs('div', {
-        className: 'ia-incident-actions',
+        className: 'ia-incident-btns',
         children: [
           jsx('button', {
             type: 'button',
-            className: 'ia-btn',
+            className: 'ia-btn ia-btn-ghost',
             onClick: () => onHeal(primary.node_id),
-            children: '⚡ Run playbook'
+            children: '↻ Heal'
           }),
           jsx('button', {
             type: 'button',
             className: 'ia-btn ia-btn-primary',
-            onClick: () => {
-              pendingSelect = primary.node_id
-              host.navigate(PAGE_PATH)
-            },
-            children: 'Open node'
+            onClick: () => onInspect(primary.node_id),
+            children: 'Inspect'
           })
         ]
       })
@@ -1433,180 +1730,71 @@ function IncidentStrip({ incidents, onHeal }) {
   })
 }
 
-async function healNode(nodeId, setBusy, refetch) {
-  setBusy(`heal:${nodeId}`)
-  try {
-    const outcome = await rest('/heal', { method: 'POST', body: { node_id: nodeId } })
-    host.notify({
-      kind: outcome.ok ? 'info' : 'warning',
-      message: outcome.ok
-        ? `Healed ${nodeId} via ${outcome.command} (${outcome.status})`
-        : `${nodeId}: ${outcome.reason || outcome.detail || 'heal did not succeed'}`
-    })
-    await refetch()
-  } catch (err) {
-    host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
-  } finally {
-    setBusy('')
-  }
-}
-
-// ── inspector ──────────────────────────────────────────────────────────────
-// Idle state: a fleet panel — status breakdown, open incidents and a hint —
-// so the rail always carries real information instead of dead space.
-function FleetPanel({ counts, incidents, lastSweep, onFocus }) {
-  const attention = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
-  const rows = [
-    ['matched', 'Matched', counts.matched || 0, '#34d399'],
-    ['attention', 'Needs attention', attention, '#fbbf24'],
-    ['other', 'Docs & peers', (counts.observed || 0) + (counts.doc_only || 0), '#9fb0cc']
-  ]
-  return jsxs(Fragment, { children: [
-    jsxs('div', { className: 'ia-fleet-grid', children: rows.map(([key, label, n, color]) =>
+function ActivityDock({ entries, open, setOpen, compact, onSelectNode }) {
+  const rows = (entries || []).slice(0, 18)
+  const latest = rows[0] || null
+  return jsxs('div', {
+    className: 'ia-activity-dock',
+    children: [
+      open
+        ? jsxs('div', {
+            className: 'ia-activity-card ia-glass',
+            children: [
+              jsxs('div', {
+                className: 'ia-activity-head',
+                children: [
+                  jsxs('div', {
+                    className: 'ia-activity-head-left',
+                    children: [
+                      jsx('span', { className: 'ia-live-dot' }),
+                      jsx('span', { className: 'ia-pop-title', children: 'Live Activity & Guardrail' })
+                    ]
+                  }),
+                  jsx('button', { type: 'button', className: 'ia-icon-btn', onClick: () => setOpen(false), children: '✕' })
+                ]
+              }),
+              rows.length
+                ? jsx('div', {
+                    className: 'ia-activity-list',
+                    children: rows.map((entry, index) => {
+                      const kind = entry.action_kind || 'info'
+                      return jsxs('button', {
+                        type: 'button',
+                        className: cn('ia-activity-row', `ia-act-${kind}`),
+                        onClick: () => entry.node_id && onSelectNode(entry.node_id),
+                        children: [
+                          jsx('span', { className: 'ia-activity-badge', children: kind.replace('touch_', '').replace('_doc', '') }),
+                          jsx('span', { className: 'ia-activity-summary', children: entry.summary || entry.tool_name || '' }),
+                          jsx('span', { className: 'ia-activity-time', children: ago(entry.ts) })
+                        ]
+                      }, `act-${entry.id || index}`)
+                    })
+                  })
+                : jsx('div', { className: 'ia-muted ia-pad', children: 'No recent tool activity recorded.' })
+            ]
+          })
+        : null,
       jsxs('button', {
         type: 'button',
-        className: cn('ia-fleet-cell', !n && 'ia-fleet-zero'),
-        onClick: () => onFocus(key),
+        className: cn('ia-activity-pill ia-glass', open && 'ia-btn-active'),
+        onClick: () => setOpen(o => !o),
         children: [
-          jsxs('div', { className: 'ia-fleet-num', children: [
-            jsx('span', { className: 'ia-fleet-diamond', style: { background: color } }),
-            String(n)
-          ] }),
-          jsx('div', { className: 'ia-fleet-label', children: label })
-        ]
-      }, key))
-    }),
-    incidents.length
-      ? jsxs('div', { className: 'ia-block', children: [
-          jsx('div', { className: 'ia-block-title', children: 'Open incidents' }),
-          jsx('ul', { className: 'ia-list', children: incidents.map(incident =>
-            jsx('li', {
-              children: jsxs('button', {
-                type: 'button',
-                className: 'ia-inc-item',
-                onClick: () => onFocus('attention', incident.node_id),
-                children: [
-                  jsxs('span', { className: 'ia-inc-head', children: [
-                    `#${incident.id} ${incident.node_label || incident.node_id}`,
-                    jsx('span', { className: 'ia-incident-state', children: incident.status })
-                  ] }),
-                  jsx('span', { className: 'ia-inc-detail', children: incident.trigger_error || '' })
-                ]
+          jsx('span', { className: 'ia-live-dot' }),
+          jsx('span', { className: 'ia-activity-pill-label', children: 'Activity' }),
+          !compact && latest
+            ? jsx('span', {
+                className: cn('ia-activity-peek', latest.action_kind === 'touch_blocked' && 'ia-peek-danger'),
+                children: truncate(latest.summary || latest.node_id || '', 28)
               })
-            }, `fleet-inc-${incident.id}`))
-          })
-        ] })
-      : null,
-    lastSweep
-      ? jsx('div', { className: 'ia-kv', children: kv('last sweep', ago(lastSweep.finished_at)) })
-      : null,
-    jsx('div', { className: 'ia-muted', children: 'Select a shape on the map — or a category above — to inspect registry state, live diff and recovery playbooks.' })
-  ] })
+            : null,
+          rows.length ? jsx('span', { className: 'ia-seg-count', children: String(rows.length) }) : null
+        ]
+      })
+    ]
+  })
 }
 
-// flat pictograms mirroring the diorama shapes, for the legend
-function LegendGlyph({ kind }) {
-  const scene = kindScene(kind)
-  const c = scene.accent
-  const m = scene.mat
-  const common = { fill: m, stroke: c, strokeWidth: 1 }
-  let inner
-  switch (scene.shape) {
-    case 'rack':
-      inner = [
-        jsx('rect', { x: 4, y: 1, width: 10, height: 12, ...common }),
-        jsx('path', { d: 'M 6 4 H 12 M 6 7 H 12 M 6 10 H 12', stroke: c, strokeWidth: 1, fill: 'none', opacity: .8 })
-      ]
-      break
-    case 'tower':
-      inner = [jsx('rect', { x: 6, y: 1, width: 6, height: 12, ...common }), jsx('path', { d: 'M 7.5 4 H 10.5', stroke: c, fill: 'none' })]
-      break
-    case 'tank':
-      inner = [
-        jsx('rect', { x: 5, y: 3, width: 8, height: 9, ...common }),
-        jsx('ellipse', { cx: 9, cy: 3, rx: 4, ry: 1.6, fill: 'none', stroke: c })
-      ]
-      break
-    case 'cargo':
-      inner = [
-        jsx('rect', { x: 1, y: 4, width: 16, height: 7, ...common }),
-        jsx('path', { d: 'M 4.5 4 V 11 M 7.5 4 V 11 M 10.5 4 V 11 M 13.5 4 V 11', stroke: c, strokeWidth: .8, fill: 'none', opacity: .7 })
-      ]
-      break
-    case 'plate':
-      inner = jsx('rect', { x: 2, y: 5, width: 14, height: 5, ...common })
-      break
-    case 'bot':
-      inner = [
-        jsx('rect', { x: 6, y: 5, width: 6, height: 7, ...common }),
-        jsx('path', { d: 'M 9 5 V 2', stroke: c, fill: 'none' }),
-        jsx('circle', { cx: 9, cy: 1.5, r: 1, fill: c })
-      ]
-      break
-    case 'orb':
-      inner = [
-        jsx('circle', { cx: 9, cy: 7, r: 3.2, fill: c }),
-        jsx('ellipse', { cx: 9, cy: 7, rx: 6.5, ry: 2.2, fill: 'none', stroke: c, opacity: .55 })
-      ]
-      break
-    case 'clock':
-      inner = [
-        jsx('circle', { cx: 9, cy: 7, r: 4.6, fill: '#141d2c', stroke: c }),
-        jsx('path', { d: 'M 9 7 V 3.6', stroke: c, strokeWidth: 1.2, fill: 'none' })
-      ]
-      break
-    case 'beacon':
-      inner = jsx('path', { d: 'M 9 1.5 L 13.5 12.5 L 4.5 12.5 Z', ...common })
-      break
-    default:
-      inner = [jsx('rect', { x: 4, y: 4, width: 10, height: 6, ...common }), jsx('path', { d: 'M 9 5.5 L 11 7 L 9 8.5 L 7 7 Z', fill: c })]
-  }
-  return Array.isArray(inner)
-    ? jsxs('svg', { width: 18, height: 14, viewBox: '0 0 18 14', 'aria-hidden': true, children: inner })
-    : jsx('svg', { width: 18, height: 14, viewBox: '0 0 18 14', 'aria-hidden': true, children: inner })
-}
-
-const LEGEND_KINDS = [
-  ['server', 'Server'], ['vm', 'Virtual machine'], ['lxc', 'LXC container'], ['container', 'Docker / podman'],
-  ['service', 'Service'], ['project', 'Project'], ['agent', 'Hermes agent'], ['model_endpoint', 'Model endpoint'],
-  ['cron', 'Cron job'], ['peer', 'Tailnet peer']
-]
-const LEGEND_LINKS = [
-  ['hosts', 'hosts'], ['depends_on', 'depends on'], ['uses_model', 'uses model'],
-  ['monitors', 'monitors'], ['proxies_to', 'proxies to']
-]
-
-function Legend() {
-  const [open, setOpen] = React.useState(true)
-  return jsxs('div', { className: 'ia-legend-wrap', children: [
-    jsx('button', {
-      type: 'button',
-      className: 'ia-btn ia-legend-toggle',
-      onClick: () => setOpen(o => !o),
-      children: open ? 'Legend −' : 'Legend +'
-    }),
-    open
-      ? jsxs('div', { className: 'ia-legend', children: [
-          jsx('div', { className: 'ia-legend-title', children: 'Node kinds' }),
-          jsx('div', { className: 'ia-legend-grid', children: LEGEND_KINDS.map(([kind, label]) =>
-            jsxs('div', { className: 'ia-legend-row', children: [
-              jsx(LegendGlyph, { kind }),
-              jsx('span', { children: label })
-            ] }, kind)) }),
-          jsx('div', { className: 'ia-legend-title', children: 'Links' }),
-          jsx('div', { className: 'ia-legend-grid', children: LEGEND_LINKS.map(([rel, label]) => {
-            const style = relationStyle(rel)
-            return jsxs('div', { className: 'ia-legend-row', children: [
-              jsx('svg', { width: 18, height: 14, 'aria-hidden': true, children: jsx('line', { x1: 1, y1: 7, x2: 17, y2: 7, stroke: style.color, strokeWidth: 1.6, strokeDasharray: style.dash || undefined }) }),
-              jsx('span', { children: label })
-            ] }, rel)
-          }) })
-        ] })
-      : null
-  ] })
-}
-
-function Inspector({ node, busy, onClose, onRefetch, setBusy, guardrail, counts, fleetIncidents, lastSweep, onFocus }) {
+function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch, guardrail, sessionReads }) {
   const [tab, setTab] = React.useState('overview')
   const detail = useNode(node ? node.id : null)
 
@@ -1614,212 +1802,187 @@ function Inspector({ node, busy, onClose, onRefetch, setBusy, guardrail, counts,
     setTab('overview')
   }, [node && node.id])
 
-  if (!node) {
-    return hud('ia-inspector ia-inspector-empty', [
-      jsx('div', { className: 'ia-inspector-title', children: 'Fleet' }),
-      jsx(FleetPanel, { counts, incidents: fleetIncidents, lastSweep, onFocus })
-    ])
-  }
-
   const data = detail.data || {}
   const diff = data.diff || []
   const incidents = data.incidents || []
   const probes = data.probe_history || []
+  const blast = data.blast_radius || { upstream: [], downstream: [] }
   const item = data.node || node
   const drift = item.drift_status || 'matched'
+  const health = item.health_status || 'unknown'
+
+  const activeSession =
+    host.state && host.state.focusedSessionId && host.state.focusedSessionId.get
+      ? host.state.focusedSessionId.get() || 'desktop'
+      : 'desktop'
+  const isUnlocked = (sessionReads || []).some(
+    r => r.node_id === item.id && (r.session_id === activeSession || r.session_id === 'desktop')
+  )
 
   const doReconcile = action =>
-    healBusy(setBusy, `reconcile:${node.id}`, async () => {
-      await rest('/reconcile', { method: 'POST', body: { node_id: node.id, action } })
-      host.notify({ kind: 'info', message: `${item.id}: ${action.replace('_', ' ')} written to the registry` })
+    runWithBusy(setBusy, `reconcile:${item.id}`, async () => {
+      await rest('/reconcile', { method: 'POST', body: { node_id: item.id, action } })
+      host.notify({ kind: 'info', message: `${item.id}: ${action.replace('_', ' ')} saved to registry` })
       await onRefetch()
       await detail.refetch()
     })
 
   const doUnlock = () =>
-    healBusy(setBusy, `unlock:${node.id}`, async () => {
-      const sessionId = host.state.focusedSessionId && host.state.focusedSessionId.get ? host.state.focusedSessionId.get() : null
-      await rest('/session-unlock', { method: 'POST', body: { session_id: sessionId || 'desktop', node_id: node.id } })
-      host.notify({ kind: 'info', message: `${item.id} unlocked for this session` })
+    runWithBusy(setBusy, `unlock:${item.id}`, async () => {
+      await rest('/session-unlock', { method: 'POST', body: { session_id: activeSession, node_id: item.id } })
+      host.notify({ kind: 'info', message: `Unlocked ${item.label || item.id} for active chat` })
+      await onRefetch()
     })
 
   const dispatchBrief = () =>
-    healBusy(setBusy, `dispatch:${node.id}`, async () => {
-      const brief = await rest('/heal', { method: 'POST', body: { node_id: node.id, mode: 'agent_brief' } })
+    runWithBusy(setBusy, `dispatch:${item.id}`, async () => {
+      const brief = await rest('/heal', { method: 'POST', body: { node_id: item.id, mode: 'agent_brief' } })
       const sessionId = host.state.focusedSessionId && host.state.focusedSessionId.get ? host.state.focusedSessionId.get() : null
       const sent = host.composer.submit(sessionId ?? null, brief.remediation_brief)
       host.notify({
         kind: sent ? 'info' : 'warning',
-        message: sent ? 'Incident brief sent to the active chat' : 'Open a chat to dispatch the brief'
+        message: sent ? 'Remediation brief sent to active chat' : 'Open a chat to dispatch the brief'
       })
     })
 
-  return jsxs('div', {
-    className: 'ia-inspector',
+  const needsAdoption = drift === 'changed' || drift === 'unregistered'
+  const isDown = health === 'down' || incidents.some(inc => inc.status === 'open' || inc.status === 'healing')
+
+  return jsxs('aside', {
+    className: 'ia-drawer ia-glass',
     children: [
+      // Drawer Header
       jsxs('div', {
-        className: 'ia-inspector-head',
+        className: 'ia-drawer-head',
         children: [
           jsxs('div', {
+            className: 'ia-drawer-title-row',
             children: [
-              jsx('div', { className: 'ia-inspector-title', children: item.label || item.id }),
+              jsx('div', { className: 'ia-kind-badge', children: jsx(LegendGlyph, { kind: item.kind }) }),
               jsxs('div', {
-                className: 'ia-inspector-meta',
+                className: 'ia-drawer-titles',
                 children: [
-                  jsx('span', { className: 'ia-tag', style: { borderColor: DRIFT_COLOR[drift] }, children: DRIFT_LABEL[drift] || drift }),
-                  jsx('span', { className: 'ia-tag', style: { borderColor: HEALTH_COLOR[item.health_status] }, children: item.health_status || 'unknown' }),
-                  jsx('span', { className: 'ia-muted', children: item.kind || '' }),
-                  item.vmid ? jsx('span', { className: 'ia-muted', children: `vmid ${item.vmid}` }) : null
-                ]
-              })
-            ]
-          }),
-          jsx('button', { type: 'button', className: 'ia-close', onClick: onClose, children: '✕' })
-        ]
-      }),
-      jsxs('div', {
-        className: 'ia-tabs',
-        children: [
-          tabButton('overview', 'Overview & diff', tab, setTab),
-          tabButton('uptime', 'Uptime & auto-heal', tab, setTab),
-          tabButton('runbook', 'Runbook', tab, setTab),
-          tabButton('raw', 'Raw JSON', tab, setTab)
-        ]
-      }),
-      jsxs('div', {
-        className: 'ia-tab-body',
-        children: [
-          tab === 'overview' ? OverviewTab({ item, diff, guardrail, doReconcile, doUnlock, busy }) : null,
-          tab === 'uptime'
-            ? UptimeTab({ item, probes, incidents, busy, nodeId: node.id, setBusy, onRefetch, detail })
-            : null,
-          tab === 'runbook' ? RunbookTab({ item, markdown: data.registry_markdown, pitfalls: item.pitfalls_summary }) : null,
-          tab === 'raw' ? RawTab({ data }) : null
-        ]
-      }),
-      jsxs('div', {
-        className: 'ia-inspector-foot',
-        children: [
-          jsx('button', {
-            type: 'button',
-            className: 'ia-btn',
-            disabled: busy === `dispatch:${node.id}`,
-            onClick: dispatchBrief,
-            children: '🤖 Dispatch brief'
-          }),
-          jsx('button', {
-            type: 'button',
-            className: 'ia-btn',
-            disabled: busy === `heal:${node.id}`,
-            onClick: () => healNode(node.id, setBusy, onRefetch),
-            children: '⚡ Heal'
-          })
-        ]
-      })
-    ]
-  })
-}
-
-async function healBusy(setBusy, label, fn) {
-  setBusy(label)
-  try {
-    await fn()
-  } catch (err) {
-    host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
-  } finally {
-    setBusy('')
-  }
-}
-
-function tabButton(key, label, tab, setTab) {
-  return jsx('button', {
-    type: 'button',
-    className: cn('ia-tab', tab === key && 'ia-tab-active'),
-    onClick: () => setTab(key),
-    children: label
-  })
-}
-
-function OverviewTab({ item, diff, guardrail, doReconcile, doUnlock, busy }) {
-  return jsxs(Fragment, {
-    children: [
-      jsxs('div', {
-        className: 'ia-kv',
-        children: [
-          kv('id', item.id),
-          kv('address', addressOf(item) || '—'),
-          kv('tailnet', item.tailnet_ip || '—'),
-          kv('managed by', item.managed_by || '—'),
-          kv('unit', item.systemd_unit || '—'),
-          kv('registry', item.registry_path || 'no entry'),
-          kv('guardrail', guardrail),
-          kv('last seen', ago(item.last_seen_live_at))
-        ]
-      }),
-      (item.drift_reasons || []).length
-        ? jsxs('div', {
-            className: 'ia-block',
-            children: [
-              jsx('div', { className: 'ia-block-title', children: 'Drift evidence' }),
-              jsx('ul', { className: 'ia-list', children: (item.drift_reasons || []).map((reason, index) => jsx('li', { children: reason }, `reason-${index}`)) })
-            ]
-          })
-        : null,
-      diff.length
-        ? jsxs('div', {
-            className: 'ia-block',
-            children: [
-              jsx('div', { className: 'ia-block-title', children: 'Registry vs live' }),
-              jsx('table', {
-                className: 'ia-table',
-                children: [
-                  jsx('thead', {
-                    children: jsxs('tr', {
-                      children: [jsx('th', { children: 'field' }), jsx('th', { children: 'registry' }), jsx('th', { children: 'live' })]
-                    })
-                  }),
-                  jsx('tbody', {
-                    children: diff.map((row, index) =>
-                      jsxs('tr', { children: [jsx('td', { children: row.field }), jsx('td', { children: format(row.doc) }), jsx('td', { children: format(row.live) })] }, `diff-${index}`)
-                    )
+                  jsx('div', { className: 'ia-drawer-title', children: item.label || item.id }),
+                  jsx('div', {
+                    className: 'ia-drawer-sub',
+                    children: [item.kind, item.vmid ? `VMID ${item.vmid}` : null, addressOf(item)].filter(Boolean).join(' · ')
                   })
                 ]
               }),
-              jsxs('div', {
-                className: 'ia-row',
-                children: [
-                  jsx('button', {
+              jsx('button', { type: 'button', className: 'ia-icon-btn', title: 'Close inspector (Esc)', onClick: onClose, children: '✕' })
+            ]
+          }),
+
+          jsxs('div', {
+            className: 'ia-badges',
+            children: [
+              jsx('span', {
+                className: 'ia-badge',
+                style: { borderColor: DRIFT_COLOR[drift], color: DRIFT_COLOR[drift] },
+                children: DRIFT_LABEL[drift] || drift
+              }),
+              jsx('span', {
+                className: 'ia-badge',
+                style: { borderColor: HEALTH_COLOR[health], color: HEALTH_COLOR[health] },
+                children: health
+              }),
+              item.uptime_24h_pct !== null && item.uptime_24h_pct !== undefined
+                ? jsx('span', { className: 'ia-badge ia-badge-neutral', children: `${pct(item.uptime_24h_pct)} 24h` })
+                : null,
+              item.latency_ms
+                ? jsx('span', { className: 'ia-badge ia-badge-neutral', children: `${Math.round(item.latency_ms)} ms` })
+                : null
+            ]
+          }),
+
+          // Single Contextual Action Bar
+          jsxs('div', {
+            className: 'ia-drawer-actions',
+            children: [
+              needsAdoption
+                ? jsx('button', {
                     type: 'button',
-                    className: 'ia-btn ia-btn-primary',
+                    className: 'ia-btn ia-btn-primary ia-btn-full',
                     disabled: Boolean(busy),
                     onClick: () => doReconcile('adopt_live'),
-                    children: '✓ Adopt live into registry'
-                  }),
-                  jsx('button', {
-                    type: 'button',
-                    className: 'ia-btn',
-                    disabled: Boolean(busy),
-                    onClick: () => doReconcile('mark_removed'),
-                    children: 'Mark removed'
+                    children: drift === 'unregistered' ? '✓ Register in KB' : '✓ Adopt Live Drift'
                   })
-                ]
+                : null,
+              isDown && item.recovery_cmd
+                ? jsx('button', {
+                    type: 'button',
+                    className: 'ia-btn ia-btn-primary ia-btn-full',
+                    disabled: Boolean(busy),
+                    onClick: () =>
+                      healNode(item.id, setBusy, async () => {
+                        await onRefetch()
+                        await detail.refetch()
+                      }),
+                    children: '↻ Run Playbook'
+                  })
+                : null,
+              item.registry_path && guardrail !== 'off'
+                ? jsx('button', {
+                    type: 'button',
+                    className: cn('ia-btn ia-btn-ghost ia-btn-flex', isUnlocked && 'ia-btn-unlocked'),
+                    disabled: Boolean(busy) || isUnlocked,
+                    onClick: doUnlock,
+                    children: isUnlocked ? '✓ Unlocked' : '✓ Unlock Chat'
+                  })
+                : null,
+              jsx('button', {
+                type: 'button',
+                className: 'ia-btn ia-btn-ghost ia-btn-flex',
+                disabled: Boolean(busy),
+                onClick: dispatchBrief,
+                title: 'Send context & runbook brief to active chat',
+                children: '✦ Ask Hermes'
               })
             ]
           })
-        : jsx('div', { className: 'ia-block', children: jsx('div', { className: 'ia-muted', children: 'Registry and live state agree.' }) }),
+        ]
+      }),
+
+      // Segmented Tabs
       jsxs('div', {
-        className: 'ia-row',
+        className: 'ia-drawer-tabs',
         children: [
-          jsx('button', { type: 'button', className: 'ia-btn', disabled: Boolean(busy), onClick: doUnlock, children: '🔓 Unlock for this chat' }),
-          item.registry_path
-            ? jsx('button', {
-                type: 'button',
-                className: 'ia-btn',
-                onClick: () => {
-                  pendingSelect = item.id
-                  host.navigate(PAGE_PATH)
-                },
-                children: '⊙ Focus on graph'
+          drawerTab('overview', 'Overview', tab, setTab),
+          drawerTab('uptime', 'Uptime', tab, setTab),
+          drawerTab('runbook', 'Runbook', tab, setTab)
+        ]
+      }),
+
+      // Tab Content
+      jsxs('div', {
+        className: 'ia-drawer-body',
+        children: [
+          tab === 'overview'
+            ? jsx(OverviewSection, {
+                item,
+                diff,
+                blast,
+                busy,
+                doReconcile,
+                onSelectNode
+              })
+            : null,
+          tab === 'uptime'
+            ? jsx(UptimeSection, {
+                item,
+                probes,
+                incidents,
+                busy,
+                setBusy,
+                onRefetch,
+                detail
+              })
+            : null,
+          tab === 'runbook'
+            ? jsx(RunbookSection, {
+                item,
+                markdown: data.registry_markdown,
+                raw: data
               })
             : null
         ]
@@ -1828,156 +1991,334 @@ function OverviewTab({ item, diff, guardrail, doReconcile, doUnlock, busy }) {
   })
 }
 
-function UptimeTab({ item, probes, incidents, busy, nodeId, setBusy, onRefetch, detail }) {
+function drawerTab(key, label, tab, setTab) {
+  return jsx('button', {
+    type: 'button',
+    className: cn('ia-dtab', tab === key && 'ia-dtab-active'),
+    onClick: () => setTab(key),
+    children: label
+  })
+}
+
+function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode }) {
+  const reasons = item.drift_reasons || []
+  const upstream = (blast && blast.upstream) || []
+  const downstream = (blast && blast.downstream) || []
+
+  return jsxs(Fragment, {
+    children: [
+      // 1. Operational Pitfalls Callout (surfaced prominently!)
+      item.pitfalls_summary
+        ? jsxs('div', {
+            className: 'ia-callout ia-callout-warn',
+            children: [
+              jsx('div', { className: 'ia-callout-title', children: '⚠ Operational Guardrail & Pitfalls' }),
+              jsx('div', { className: 'ia-callout-body', children: item.pitfalls_summary })
+            ]
+          })
+        : null,
+
+      // 2. Drift Diff Card (only when drifted)
+      diff.length || (reasons.length && item.drift_status !== 'observed')
+        ? jsxs('div', {
+            className: 'ia-section',
+            children: [
+              jsx('div', { className: 'ia-section-title', children: 'Drift Evidence (Registry vs. Live)' }),
+              diff.length
+                ? jsx('table', {
+                    className: 'ia-table',
+                    children: [
+                      jsx('thead', {
+                        children: jsxs('tr', {
+                          children: [
+                            jsx('th', { children: 'Field' }),
+                            jsx('th', { children: 'Registry' }),
+                            jsx('th', { children: 'Live' })
+                          ]
+                        })
+                      }, 'thead'),
+                      jsx('tbody', {
+                        children: diff.map((row, index) =>
+                          jsxs('tr', {
+                            children: [
+                              jsx('td', { className: 'ia-td-key', children: row.field }),
+                              jsx('td', { children: format(row.doc) }),
+                              jsx('td', { className: 'ia-td-live', children: format(row.live) })
+                            ]
+                          }, `diff-${index}`)
+                        )
+                      }, 'tbody')
+                    ]
+                  })
+                : jsx('ul', {
+                    className: 'ia-list',
+                    children: reasons.map((reason, index) => jsx('li', { children: reason }, `r-${index}`))
+                  })
+            ]
+          })
+        : null,
+
+      // 3. Key-Value Properties Grid
+      jsxs('div', {
+        className: 'ia-section',
+        children: [
+          jsx('div', { className: 'ia-section-title', children: 'Node Properties' }),
+          jsxs('div', {
+            className: 'ia-prop-grid',
+            children: [
+              propCard('Node ID', item.id),
+              propCard('LAN Address', addressOf(item) || '—'),
+              propCard('Tailnet IP', item.tailnet_ip || '—'),
+              propCard('Managed By', item.managed_by || '—'),
+              propCard('Systemd Unit', item.systemd_unit || '—'),
+              propCard('Registry Entry', item.registry_path || 'Unregistered'),
+              propCard('Last Seen Alive', ago(item.last_seen_live_at)),
+              propCard('Auto-Heal Policy', item.auto_heal_policy || 'inherit')
+            ]
+          })
+        ]
+      }),
+
+      // 4. Interactive Blast Radius
+      upstream.length || downstream.length
+        ? jsxs('div', {
+            className: 'ia-section',
+            children: [
+              jsx('div', { className: 'ia-section-title', children: 'Topology & Blast Radius' }),
+              upstream.length
+                ? jsxs('div', {
+                    className: 'ia-blast-group',
+                    children: [
+                      jsx('div', { className: 'ia-blast-label', children: '↑ Upstream Hosts & Dependencies' }),
+                      jsx('div', {
+                        className: 'ia-chip-list',
+                        children: upstream.map(dep =>
+                          jsxs('button', {
+                            type: 'button',
+                            className: 'ia-node-chip',
+                            onClick: () => onSelectNode(dep.id),
+                            children: [
+                              jsx(LegendGlyph, { kind: dep.kind }),
+                              jsx('span', { children: dep.label || dep.id })
+                            ]
+                          }, `up-${dep.id}`)
+                        )
+                      })
+                    ]
+                  })
+                : null,
+              downstream.length
+                ? jsxs('div', {
+                    className: 'ia-blast-group',
+                    children: [
+                      jsx('div', { className: 'ia-blast-label', children: '↓ Downstream Dependents (Impact)' }),
+                      jsx('div', {
+                        className: 'ia-chip-list',
+                        children: downstream.map(dep =>
+                          jsxs('button', {
+                            type: 'button',
+                            className: 'ia-node-chip',
+                            onClick: () => onSelectNode(dep.id),
+                            children: [
+                              jsx(LegendGlyph, { kind: dep.kind }),
+                              jsx('span', { children: dep.label || dep.id })
+                            ]
+                          }, `dn-${dep.id}`)
+                        )
+                      })
+                    ]
+                  })
+                : null
+            ]
+          })
+        : null,
+
+      // 5. Subtle Retire Action at bottom if documented
+      item.registry_path && item.drift_status !== 'doc_only'
+        ? jsx('div', {
+            className: 'ia-section-foot',
+            children: jsx('button', {
+              type: 'button',
+              className: 'ia-link-btn',
+              disabled: Boolean(busy),
+              onClick: () => doReconcile('mark_removed'),
+              children: 'Mark entry as decommissioned in registry…'
+            })
+          })
+        : null
+    ]
+  })
+}
+
+function propCard(label, value) {
+  return jsxs('div', {
+    className: 'ia-prop',
+    children: [
+      jsx('div', { className: 'ia-prop-label', children: label }),
+      jsx('div', { className: 'ia-prop-val', children: String(value) })
+    ]
+  })
+}
+
+function UptimeSection({ item, probes, incidents, busy, setBusy, onRefetch, detail }) {
   const history = probes || []
   const max = Math.max(1, ...history.map(sample => Number(sample.latency_ms) || 0))
+  const probeUrl = (item.live_state && item.live_state.probe) || (item.doc_state && item.doc_state.probe) || item.probe || 'None configured'
+
+  const resolveIncident = incidentId =>
+    runWithBusy(setBusy, `resolve:${incidentId}`, async () => {
+      await rest(`/incidents/${incidentId}/resolve`, { method: 'POST', body: { summary: 'Resolved from Infra Atlas inspector' } })
+      host.notify({ kind: 'info', message: `Incident #${incidentId} resolved` })
+      await onRefetch()
+      await detail.refetch()
+    })
+
   return jsxs(Fragment, {
     children: [
       jsxs('div', {
-        className: 'ia-stats',
+        className: 'ia-metric-strip',
         children: [
-          stat('24h uptime', pct(item.uptime_24h_pct)),
-          stat('latency', item.latency_ms ? `${Math.round(item.latency_ms)} ms` : '—'),
-          stat('failures', String(item.failure_streak || 0)),
-          stat('policy', item.auto_heal_policy || 'inherit')
+          metricBox('24h Uptime', pct(item.uptime_24h_pct)),
+          metricBox('Latency', item.latency_ms ? `${Math.round(item.latency_ms)} ms` : '—'),
+          metricBox('Fail Streak', String(item.failure_streak || 0))
         ]
       }),
+
       jsxs('div', {
-        className: 'ia-block',
+        className: 'ia-section',
         children: [
-          jsx('div', { className: 'ia-block-title', children: 'Recent probes' }),
+          jsxs('div', {
+            className: 'ia-section-head-row',
+            children: [
+              jsx('span', { className: 'ia-section-title', children: 'Probe Latency Sparkline' }),
+              jsx('span', { className: 'ia-muted', children: `${history.length} samples` })
+            ]
+          }),
           history.length
             ? jsx('div', {
                 className: 'ia-spark',
                 children: history.map((sample, index) =>
                   jsx('span', {
                     className: cn('ia-spark-bar', sample.status !== 'up' && 'ia-spark-down'),
-                    style: { height: `${Math.max(6, Math.round(((Number(sample.latency_ms) || 0) / max) * 100))}%` },
-                    title: `${sample.status} · ${sample.latency_ms ? Math.round(sample.latency_ms) + 'ms' : 'no latency'} · ${sample.detail || ''}`
+                    style: { height: `${Math.max(10, Math.round(((Number(sample.latency_ms) || 1) / max) * 100))}%` },
+                    title: `${sample.status.toUpperCase()} · ${sample.latency_ms ? Math.round(sample.latency_ms) + ' ms' : 'no latency'} · ${sample.detail || ''} (${ago(sample.ts)})`
                   }, `probe-${index}`)
                 )
               })
-            : jsx('div', { className: 'ia-muted', children: 'No probes recorded yet.' })
+            : jsx('div', { className: 'ia-muted', children: 'No probe samples recorded for this node yet.' })
         ]
       }),
+
       jsxs('div', {
-        className: 'ia-kv',
+        className: 'ia-section',
         children: [
-          kv('recovery command', item.recovery_cmd || 'none (agent decides)'),
-          kv('probe', (item.live_state && item.live_state.probe) || (item.doc_state && item.doc_state.probe) || 'none'),
-          kv('last heal attempt', ago(item.last_heal_attempt_at))
+          jsx('div', { className: 'ia-section-title', children: 'Health Check & Playbook' }),
+          jsxs('div', {
+            className: 'ia-prop-grid',
+            children: [
+              propCard('Probe Endpoint', probeUrl),
+              propCard('Recovery Command', item.recovery_cmd || 'Agent-managed'),
+              propCard('Last Heal Attempt', ago(item.last_heal_attempt_at)),
+              propCard('Latest Detail', (item.live_state && item.live_state.probe_detail) || '—')
+            ]
+          }),
+          item.recovery_cmd
+            ? jsx('button', {
+                type: 'button',
+                className: 'ia-btn ia-btn-ghost',
+                disabled: Boolean(busy),
+                onClick: () =>
+                  healNode(item.id, setBusy, async () => {
+                    await onRefetch()
+                    await detail.refetch()
+                  }),
+                children: '↻ Test Recovery Playbook Now'
+              })
+            : null
         ]
       }),
+
       jsxs('div', {
-        className: 'ia-block',
+        className: 'ia-section',
         children: [
-          jsx('div', { className: 'ia-block-title', children: 'Incidents' }),
+          jsx('div', { className: 'ia-section-title', children: 'Incident History' }),
           incidents.length
-            ? jsx('ul', {
-                className: 'ia-list',
+            ? jsx('div', {
+                className: 'ia-inc-cards',
                 children: incidents.map(incident =>
-                  jsx('li', {
-                    children: `#${incident.id} ${incident.status} — ${incident.trigger_error}${incident.resolution_summary ? ` → ${incident.resolution_summary}` : ''}`
-                  }, `incident-${incident.id}`)
+                  jsxs('div', {
+                    className: 'ia-inc-card',
+                    children: [
+                      jsxs('div', {
+                        className: 'ia-inc-card-head',
+                        children: [
+                          jsx('strong', { children: `#${incident.id} · ${incident.status}` }),
+                          jsx('span', { className: 'ia-muted', children: ago(incident.started_at || incident.opened_at) }),
+                          incident.status !== 'resolved'
+                            ? jsx('button', {
+                                type: 'button',
+                                className: 'ia-btn ia-btn-xs',
+                                disabled: Boolean(busy),
+                                onClick: () => resolveIncident(incident.id),
+                                children: 'Resolve'
+                              })
+                            : null
+                        ]
+                      }),
+                      jsx('div', { className: 'ia-inc-card-err', children: incident.trigger_error }),
+                      incident.resolution_summary
+                        ? jsx('div', { className: 'ia-inc-card-res', children: `↳ ${incident.resolution_summary}` })
+                        : null
+                    ]
+                  }, `inc-${incident.id}`)
                 )
               })
-            : jsx('div', { className: 'ia-muted', children: 'No incidents recorded for this node.' })
+            : jsx('div', { className: 'ia-muted', children: 'Zero downtime incidents recorded.' })
         ]
-      }),
-      jsx('div', {
-        className: 'ia-row',
-        children: jsx('button', {
-          type: 'button',
-          className: 'ia-btn',
-          disabled: Boolean(busy),
-          onClick: () => healNode(nodeId, setBusy, async () => {
-            await onRefetch()
-            await detail.refetch()
-          }),
-          children: '⚡ Run recovery playbook'
-        })
       })
     ]
   })
 }
 
-function RunbookTab({ item, markdown, pitfalls }) {
-  if (!item.registry_path) {
-    return jsx('div', {
-      className: 'ia-block',
-      children: jsx('div', {
-        className: 'ia-muted',
-        children: 'This node has no registry entry yet. Adopt it from the Overview tab to start its runbook.'
-      })
-    })
-  }
+function metricBox(label, value) {
+  return jsxs('div', {
+    className: 'ia-metric',
+    children: [
+      jsx('div', { className: 'ia-metric-val', children: value }),
+      jsx('div', { className: 'ia-metric-lbl', children: label })
+    ]
+  })
+}
+
+function RunbookSection({ item, markdown, raw }) {
+  const [showRaw, setShowRaw] = React.useState(false)
   return jsxs(Fragment, {
     children: [
-      pitfalls
-        ? jsxs('div', {
-            className: 'ia-block ia-pitfall',
-            children: [jsx('div', { className: 'ia-block-title', children: '⚠ Known pitfalls' }), jsx('div', { children: pitfalls })]
+      jsxs('div', {
+        className: 'ia-section-head-row',
+        children: [
+          jsx('span', { className: 'ia-section-title', children: item.registry_path || 'Node Payload' }),
+          jsx('button', {
+            type: 'button',
+            className: 'ia-link-btn',
+            onClick: () => setShowRaw(r => !r),
+            children: showRaw ? 'Show Runbook Markdown' : 'View Raw JSON'
           })
-        : null,
-      jsx('pre', { className: 'ia-runbook', children: markdown || 'Loading runbook…' })
-    ]
-  })
-}
-
-function RawTab({ data }) {
-  return jsx('pre', {
-    className: 'ia-runbook ia-json',
-    children: JSON.stringify(data || {}, null, 2)
-  })
-}
-
-function ActivityStream({ entries, incidents }) {
-  const rows = (entries || []).slice(0, 12)
-  return jsxs('div', {
-    className: 'ia-stream',
-    children: [
-      jsxs('div', { className: 'ia-stream-title', children: [jsx('span', { className: 'ia-live-dot' }), 'Live activity & guardrail'] }),
-      rows.length
-        ? jsx('div', {
-            className: 'ia-stream-rows',
-            children: rows.map((entry, index) => {
-              const kind = entry.action_kind || 'info'
-              return jsxs('div', {
-                className: cn('ia-stream-row', `ia-kind-${kind}`),
-                children: [
-                  jsx('span', { className: 'ia-stream-time', children: entry.ts ? new Date(Number(entry.ts) * 1000).toLocaleTimeString() : '' }),
-                  jsx('span', { className: 'ia-stream-kind', children: kind.replace('_', ' ') }),
-                  jsx('span', { className: 'ia-stream-text', children: entry.summary || entry.tool_name || '' })
-                ]
-              }, `activity-${index}`)
+        ]
+      }),
+      showRaw
+        ? jsx('pre', { className: 'ia-runbook ia-json', children: JSON.stringify(raw || {}, null, 2) })
+        : item.registry_path
+          ? jsx('pre', { className: 'ia-runbook', children: markdown || 'Loading runbook…' })
+          : jsx('div', {
+              className: 'ia-muted',
+              children: 'This node does not have a Markdown registry entry yet. Click "Register in KB" above to create one.'
             })
-          })
-        : jsx('div', { className: 'ia-muted', children: 'No activity yet. Agent reads and touches appear here in real time.' }),
-    incidents && incidents.length
-      ? jsx('div', { className: 'ia-stream-foot', children: `${incidents.length} open incident(s)` })
-      : null
     ]
   })
 }
 
-const kv = (key, value) =>
-  jsxs('div', { className: 'ia-kv-row', children: [
-    jsx('span', { className: 'ia-kv-key', children: key }),
-    jsx('span', { className: 'ia-kv-lead' }),
-    jsx('span', { className: 'ia-kv-value', children: String(value) })
-  ] })
-
-const stat = (label, value) =>
-  jsxs('div', { className: 'ia-stat', children: [jsx('div', { className: 'ia-stat-value', children: value }), jsx('div', { className: 'ia-stat-label', children: label })] })
-
-const format = value => {
-  if (value === null || value === undefined) return '—'
-  if (Array.isArray(value)) return value.length ? value.join(', ') : '—'
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
-
-// ── status bar ─────────────────────────────────────────────────────────────
+// ── status bar chip ────────────────────────────────────────────────────────
 function AtlasChip() {
   const { data } = useGraph(15000)
   const [flash, setFlash] = React.useState('')
@@ -1987,8 +2328,6 @@ function AtlasChip() {
   const healthy = counts.matched || 0
   const attention = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
 
-  // A vetoed tool call is the moment the operator most wants to see: flash the
-  // chip instead of waiting for the next poll to change a number.
   React.useEffect(() => {
     if (!API) return undefined
     return API.onEvent('plugin.infra-atlas.activity', frame => {
@@ -2003,14 +2342,14 @@ function AtlasChip() {
   }, [])
 
   const label = total
-    ? `${incidents ? '🚨' : '◉'} Atlas ${healthy}/${total}${attention ? ` · ${attention} drift` : ''}${incidents ? ` · ${incidents} down` : ''}`
+    ? `${incidents ? '! ' : '◉ '}Atlas ${healthy} ok${attention ? ` · ${attention} drift` : ''}${incidents ? ` · ${incidents} down` : ''}`
     : '◉ Atlas'
   return jsx('button', {
     type: 'button',
     className: cn('ia-chip', incidents && 'ia-chip-alert', flash === 'block' && 'ia-chip-blocked'),
     title: flash === 'block' ? 'Infra Atlas — a tool call was blocked: read the registry entry first' : 'Infra Atlas — open the infrastructure graph',
     onClick: () => host.navigate(PAGE_PATH),
-    children: flash === 'block' ? `⛔ ${label}` : label
+    children: flash === 'block' ? `! ${label}` : label
   })
 }
 
@@ -2021,13 +2360,15 @@ function InfraCard({ nodeId }) {
   if (!data || !data.node) return jsx('div', { className: 'ia-card ia-muted', children: `Loading ${nodeId}…` })
   const node = data.node
   const drift = node.drift_status || 'matched'
-  return hud('ia-card', [
-    jsxs('div', {
-      className: 'ia-card-head',
+  return jsxs('div', {
+    className: 'ia-card ia-glass',
+    children: [
+      jsxs('div', {
+        className: 'ia-card-head',
         children: [
-          jsx('span', { className: 'ia-card-dot', style: { background: HEALTH_COLOR[node.health_status] || HEALTH_COLOR.unknown } }),
+          jsx('span', { className: 'ia-dot', style: { background: HEALTH_COLOR[node.health_status] || HEALTH_COLOR.unknown } }),
           jsx('strong', { children: node.label || node.id }),
-          jsx('span', { className: 'ia-tag', style: { borderColor: DRIFT_COLOR[drift] }, children: DRIFT_LABEL[drift] || drift }),
+          jsx('span', { className: 'ia-badge', style: { borderColor: DRIFT_COLOR[drift], color: DRIFT_COLOR[drift] }, children: DRIFT_LABEL[drift] || drift }),
           node.uptime_24h_pct !== null && node.uptime_24h_pct !== undefined
             ? jsx('span', { className: 'ia-muted', children: `${pct(node.uptime_24h_pct)} up` })
             : null
@@ -2042,7 +2383,7 @@ function InfraCard({ nodeId }) {
         children: [
           jsx('button', {
             type: 'button',
-            className: 'ia-btn',
+            className: 'ia-btn ia-btn-ghost',
             onClick: () => {
               pendingSelect = node.id
               host.navigate(PAGE_PATH)
@@ -2066,20 +2407,25 @@ function InfraCard({ nodeId }) {
             : null
         ]
       })
-  ])
+    ]
+  })
 }
 
 function DriftCard() {
   const { data } = useGraph(15000)
-  const nodes = ((data && data.nodes) || []).filter(node => node.drift_status && node.drift_status !== 'matched' && node.drift_status !== 'doc_only')
+  const nodes = ((data && data.nodes) || []).filter(
+    node => node.drift_status && node.drift_status !== 'matched' && node.drift_status !== 'doc_only' && node.drift_status !== 'observed'
+  )
   const incidents = (data && data.incidents) || []
-  return hud('ia-card', [
-    jsxs('div', {
-      className: 'ia-card-head',
-      children: [
-        jsx('strong', { children: 'Fleet drift' }),
+  return jsxs('div', {
+    className: 'ia-card ia-glass',
+    children: [
+      jsxs('div', {
+        className: 'ia-card-head',
+        children: [
+          jsx('strong', { children: 'Fleet Drift Summary' }),
           jsx('span', { className: 'ia-muted', children: `${nodes.length} need attention` }),
-          incidents.length ? jsx('span', { className: 'ia-tag', style: { borderColor: DRIFT_COLOR.stale }, children: `${incidents.length} incident(s)` }) : null
+          incidents.length ? jsx('span', { className: 'ia-badge ia-badge-danger', children: `${incidents.length} incident(s)` }) : null
         ]
       }),
       nodes.length
@@ -2091,287 +2437,834 @@ function DriftCard() {
               }, `drift-${node.id}`)
             )
           })
-        : jsx('div', { className: 'ia-muted', children: 'Registry and reality agree across the fleet.' }),
+        : jsx('div', { className: 'ia-muted', children: 'Registry and live fleet agree across all monitored nodes.' }),
       jsxs('div', {
         className: 'ia-row',
         children: [
-          jsx('button', { type: 'button', className: 'ia-btn', onClick: () => host.navigate(PAGE_PATH), children: 'Open Infra Atlas' }),
+          jsx('button', { type: 'button', className: 'ia-btn ia-btn-ghost', onClick: () => host.navigate(PAGE_PATH), children: 'Open Infra Atlas' }),
           jsx('button', {
             type: 'button',
             className: 'ia-btn ia-btn-primary',
             onClick: async () => {
               try {
                 await rest('/sweep', { method: 'POST', body: {} })
-                host.notify({ kind: 'info', message: 'Sweep queued — the graph is refreshing' })
+                host.notify({ kind: 'info', message: 'Sweep completed — graph refreshed' })
               } catch (err) {
                 host.notify({ kind: 'error', message: `Infra Atlas: ${err.message || err}` })
               }
             },
-            children: 'Sweep now'
+            children: '↻ Sweep Now'
           })
         ]
       })
-  ])
+    ]
+  })
 }
 
 // ── styles ─────────────────────────────────────────────────────────────────
 const CSS = `
-/* ── chrome: ops-console HUD ─────────────────────────────────────────────── */
-.ia-root { display:flex; flex-direction:column; height:100%; min-height:0; font-size:12px; color:#d9e4f5; background:#0b0f1a; }
-.ia-header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 14px; position:relative; border-bottom:1px solid rgba(96,126,190,.16); }
-.ia-title { display:flex; align-items:center; gap:9px; font-weight:700; font-size:13px; letter-spacing:.04em; text-transform:uppercase; }
-.ia-mark-top { fill:#38bdf8; }
-.ia-mark-left { fill:#1e6fa8; }
-.ia-mark-right { fill:#14486e; }
-.ia-sub { font-weight:400; font-size:10px; color:#5f6f8f; letter-spacing:.06em; }
-.ia-pills { display:flex; gap:5px; flex-wrap:wrap; }
-.ia-pill { border:none; background:rgba(30,40,64,.55); color:#9fb0cc; clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px); padding:3px 10px; font-size:10.5px; letter-spacing:.03em; cursor:pointer; transition:background .15s ease, color .15s ease; }
-.ia-pill:hover { background:rgba(44,58,92,.7); color:#d9e4f5; }
-.ia-pill-active { background:rgba(42,66,102,.9); color:#eaf4ff; box-shadow:inset 0 0 0 1px rgba(125,211,252,.4); }
-.ia-pill-incident { color:#fca5a5; box-shadow:inset 0 0 0 1px rgba(239,68,68,.45); }
-.ia-controls { display:flex; gap:7px; align-items:center; margin-left:auto; flex-wrap:wrap; }
-.ia-search { background:rgba(17,23,38,.8); border:none; box-shadow:inset 0 0 0 1px rgba(96,126,190,.28); color:#d9e4f5; clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px); padding:5px 11px; font-size:11px; min-width:190px; outline:none; }
-.ia-search:focus { box-shadow:inset 0 0 0 1px rgba(56,189,248,.65); }
-.ia-search::placeholder { color:#5f6f8f; }
-.ia-select { display:flex; align-items:center; gap:5px; font-size:9px; text-transform:uppercase; letter-spacing:.12em; color:#5f6f8f; }
-.ia-select select { background:rgba(17,23,38,.8); color:#bcd2ee; border:none; box-shadow:inset 0 0 0 1px rgba(96,126,190,.28); clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px); padding:4px 7px; font-size:11px; }
-.ia-btn { background:rgba(30,40,64,.85); border:none; box-shadow:inset 0 0 0 1px rgba(96,126,190,.3); color:#cddcf2; clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px); padding:5px 12px; font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; cursor:pointer; white-space:nowrap; transition:background .15s ease; }
-.ia-btn:hover { box-shadow:inset 0 0 0 1px rgba(125,211,252,.6); color:#eaf4ff; }
-.ia-btn:disabled { opacity:.5; cursor:default; }
-.ia-btn-primary { background:#1e6fba; color:#f2f8ff; font-weight:700; box-shadow:inset 0 0 0 1px rgba(190,230,255,.35); }
-.ia-btn-primary:hover { background:#2a80cf; }
-.ia-btn-on { box-shadow:inset 0 0 0 1px rgba(56,189,248,.8); color:#9fd8ff; }
-.ia-hud { padding:1px; background:rgba(96,146,210,.42); clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px); }
-.ia-hud-in { clip-path:polygon(11px 0,100% 0,100% calc(100% - 11px),calc(100% - 11px) 100%,0 100%,0 11px); background:#0d1322; position:relative; }
-.ia-incident { display:flex; gap:12px; align-items:center; padding:9px 16px; flex:0 0 auto; color:#ffd7d7; background:rgba(239,68,68,.09); border-bottom:1px solid rgba(239,68,68,.4); }
-.ia-incident-icon { font-size:15px; animation:ia-beacon-hard 1.6s ease-in-out infinite; }
-.ia-incident-body { display:flex; flex-direction:column; gap:2px; min-width:0; }
-.ia-incident-title { display:flex; gap:8px; align-items:center; font-size:12px; }
-.ia-incident-state { font-size:9px; text-transform:uppercase; letter-spacing:.16em; color:#f87171; }
-.ia-incident-more { font-size:10px; color:#8b93a5; }
-.ia-incident-detail { font-size:11px; color:#c1a9b2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ia-incident-hint { font-size:11px; color:#a8b6cf; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ia-incident-actions { margin-left:auto; display:flex; gap:6px; }
-.ia-body { display:flex; flex:1 1 auto; min-height:0; }
-.ia-canvas { flex:1 1 auto; min-width:0; position:relative; overflow:hidden; background:transparent; }
-.ia-graph-wrap { position:absolute; inset:0; }
-.ia-svg { width:100%; height:100%; cursor:grab; }
-.ia-svg:active { cursor:grabbing; }
-.ia-zoom { position:absolute; right:12px; top:12px; z-index:2; display:flex; flex-direction:column; gap:4px; }
-.ia-zoom button { width:26px; height:26px; border:none; clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px); background:rgba(17,23,38,.85); box-shadow:inset 0 0 0 1px rgba(96,126,190,.3); color:#9fd8ff; cursor:pointer; font-size:12px; }
-.ia-zoom button:hover { box-shadow:inset 0 0 0 1px rgba(125,211,252,.7); }
-.ia-rail { display:flex; align-items:center; gap:6px; padding:6px 14px; border-bottom:1px solid rgba(96,126,190,.14); background:rgba(15,23,40,.35); flex-wrap:wrap; }
-.ia-rail-label { font-size:8.5px; text-transform:uppercase; letter-spacing:.16em; color:#5f6f8f; margin-right:5px; }
-.ia-rail-spacer { flex:1; }
-.ia-rail-info { font-size:9.5px; color:#7fa7d9; letter-spacing:.05em; font-variant-numeric:tabular-nums; }
-.ia-fleet-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:6px; }
-.ia-fleet-cell { clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px); background:rgba(17,23,38,.7); box-shadow:inset 0 0 0 1px rgba(96,126,190,.22); padding:8px 8px; border:none; cursor:pointer; text-align:left; color:inherit; transition:box-shadow .15s ease; }
-.ia-fleet-cell:hover { box-shadow:inset 0 0 0 1px rgba(125,211,252,.6); }
-.ia-fleet-zero { opacity:.45; }
-.ia-fleet-num { font-size:19px; font-weight:700; color:#eaf4ff; display:flex; align-items:center; gap:7px; font-variant-numeric:tabular-nums; }
-.ia-fleet-diamond { width:8px; height:8px; flex:0 0 8px; clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%); }
-.ia-fleet-label { font-size:8px; text-transform:uppercase; letter-spacing:.1em; color:#5f6f8f; margin-top:3px; }
-.ia-inc-item { background:none; border:none; color:inherit; text-align:left; padding:3px 0; cursor:pointer; display:flex; flex-direction:column; gap:1px; width:100%; font:inherit; }
-.ia-inc-item:hover { color:#eaf4ff; }
-.ia-inc-head { display:flex; gap:7px; align-items:baseline; font-size:11px; }
-.ia-inc-detail { font-size:10px; color:#8b93a5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ia-legend-wrap { position:absolute; right:12px; bottom:12px; z-index:2; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
-.ia-legend-toggle { min-width:88px; text-align:center; }
-.ia-legend { width:242px; padding:10px 12px; background:rgba(12,18,31,.93); box-shadow:inset 0 0 0 1px rgba(96,126,190,.3); clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px); }
-.ia-legend-title { font-size:8.5px; text-transform:uppercase; letter-spacing:.14em; color:#7fa7d9; margin:8px 0 5px; }
-.ia-legend-title:first-child { margin-top:0; }
-.ia-legend-grid { display:grid; grid-template-columns:1fr 1fr; gap:3px 12px; }
-.ia-legend-row { display:flex; align-items:center; gap:7px; font-size:9.5px; color:#9fb0cc; white-space:nowrap; }
-.ia-legend-row svg { flex:0 0 auto; }
+/* ── layout & glassmorphic surfaces ──────────────────────────────────────── */
+.ia-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--ui-text-primary, #e2e8f0);
+  background: radial-gradient(ellipse at 50% 35%, rgba(30, 41, 59, 0.45) 0%, var(--ui-bg-primary, #090d16) 78%);
+  user-select: none;
+}
 
-/* ── isometric scene ───────────────────────────────────────────────────── */
-.ia-plat { animation:ia-rise .7s cubic-bezier(.2,.7,.3,1) both; }
-.ia-plat-top { fill:color-mix(in srgb, var(--plat, #333a4a) 92%, #ffffff); }
-.ia-plat-left { fill:color-mix(in srgb, var(--plat, #333a4a) 68%, #000000); }
-.ia-plat-right { fill:color-mix(in srgb, var(--plat, #333a4a) 44%, #000000); }
-.ia-plat-0 { --plat:#3d3a47; }
-.ia-plat-1 { --plat:#353c50; }
-.ia-plat-2 { --plat:#3b3550; }
-.ia-plat-3 { --plat:#2f4744; }
-.ia-plat-riser { fill:color-mix(in srgb, var(--plat, #333a4a) 34%, #000000); }
-.ia-plat-grid { fill:none; stroke:rgba(190,205,235,.13); stroke-width:1; }
-.ia-plat-edge { fill:none; stroke:rgba(220,235,255,.16); stroke-width:1.1; }
-.ia-plat-label { font-size:10px; font-weight:600; letter-spacing:.24em; fill:rgba(238,243,252,.6); }
+.ia-glass {
+  background: color-mix(in srgb, var(--ui-bg-secondary, #0f1523) 84%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 0 10px 30px -6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
 
-.ia-edge-line { fill:none; stroke:var(--edge-c, #96a0b5); stroke-width:var(--ew, 1.4); stroke-opacity:.78; stroke-linecap:round; animation:ia-flow var(--flow-dur, 24s) linear infinite; }
-.ia-edge:hover .ia-edge-line { stroke-opacity:1; stroke-width:calc(var(--ew, 1.4) + .9); }
-.ia-edge-hot .ia-edge-line { stroke-opacity:1; stroke-width:calc(var(--ew, 1.4) + .8); }
-.ia-edge-dim { opacity:.13; transition:opacity .3s ease; }
-.ia-edge { transition:opacity .3s ease; }
-.ia-edge-head { fill:var(--edge-c, #96a0b5); fill-opacity:.85; }
-.ia-edge-hit { fill:none; stroke:transparent; stroke-width:11; pointer-events:stroke; cursor:pointer; }
-.ia-packet-core { fill:var(--edge-c, #96a0b5); }
-.ia-packet-halo { fill:none; stroke:var(--edge-c, #96a0b5); stroke-width:1; opacity:.45; }
-.ia-burst circle { fill:var(--ui-danger, #ef4444); opacity:0; animation:ia-burst-fade 1.7s ease-out 3; }
+.ia-canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.ia-graph-wrap { position: absolute; inset: 0; }
+.ia-svg { width: 100%; height: 100%; cursor: grab; }
+.ia-svg:active { cursor: grabbing; }
 
-.ia-node { cursor:pointer; }
-.ia-lift { transition:transform .18s ease, filter .18s ease; }
-.ia-node:hover .ia-lift { transform:translateY(-2.5px); }
-.ia-node-active .ia-lift { transform:translateY(-5px); }
-.ia-f-top { fill:color-mix(in srgb, var(--mat, #424a5e) 84%, #ffffff); stroke:rgba(255,255,255,.09); stroke-width:.6; }
-.ia-f-left { fill:color-mix(in srgb, var(--mat, #424a5e) 74%, #000000); stroke:rgba(255,255,255,.05); stroke-width:.6; }
-.ia-f-right { fill:color-mix(in srgb, var(--mat, #424a5e) 50%, #000000); stroke:rgba(255,255,255,.04); stroke-width:.6; }
-.ia-f-back { fill:color-mix(in srgb, var(--mat, #424a5e) 34%, #000000); stroke:none; }
-.ia-detail { stroke:rgba(255,255,255,.14); stroke-width:1; fill:none; }
-.ia-groove { stroke:rgba(0,0,0,.34); stroke-width:1; fill:none; }
-.ia-shadow { fill:rgba(3,6,14,.42); }
-.ia-dglow { opacity:.26; animation:ia-glowp 3s ease-in-out infinite; }
-.ia-sel-ring { fill:color-mix(in srgb, var(--ui-accent, #6366f1) 10%, transparent); stroke:var(--ui-accent, #6366f1); stroke-width:1.5; stroke-dasharray:7 5; animation:ia-ants 1.1s linear infinite; }
-.ia-node-title { font-size:10px; font-weight:600; fill:var(--ui-text-primary, currentColor); paint-order:stroke; stroke:rgba(8,10,16,.72); stroke-width:2.6px; stroke-linejoin:round; }
-.ia-node-sub2 { font-size:8px; fill:var(--ui-text-quaternary, #9ca3af); paint-order:stroke; stroke:rgba(8,10,16,.72); stroke-width:2.2px; stroke-linejoin:round; }
-.ia-chipf { animation:ia-chipf 3.2s ease-in-out infinite; }
-.ia-chip-box { fill:rgba(10,12,18,.82); stroke-width:1; }
-.ia-chip-text { font-size:8.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; }
-.ia-alert-base { fill:color-mix(in srgb, var(--ui-danger, #ef4444) 9%, transparent); stroke:var(--ui-danger, #ef4444); stroke-width:1.3; stroke-dasharray:4 4; stroke-opacity:.85; }
+/* ── top floating bar ────────────────────────────────────────────────────── */
+.ia-topbar {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  right: 16px;
+  height: 44px;
+  box-sizing: border-box;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 12px;
+  flex-wrap: nowrap;
+}
 
-/* per-kind signature details */
-.ia-led { animation:ia-led-b 2.2s ease-in-out infinite; }
-.ia-led-b { animation:ia-led-b 3.4s ease-in-out infinite; }
-.ia-led-f { animation:ia-led-f 1.1s steps(2, jump-none) infinite; }
-.ia-screen { fill:#0b1120; fill-opacity:.92; stroke-width:1; stroke-opacity:.75; }
-.ia-scan { stroke:rgba(190,210,255,.85); stroke-width:1.6; animation:ia-scan 2.8s linear infinite; }
-.ia-glass { fill:color-mix(in srgb, var(--mat, #4c5262) 34%, #0e1420); stroke:rgba(255,255,255,.16); stroke-width:1; }
-.ia-liquid { opacity:.82; }
-.ia-meniscus { opacity:.55; animation:ia-meniscus 3s ease-in-out infinite; }
-.ia-rim { fill:color-mix(in srgb, var(--mat, #4c5262) 20%, #0e1420); stroke-width:1.6; }
-.ia-glass-shine { fill:rgba(255,255,255,.12); }
-.ia-hum { transform-box:fill-box; transform-origin:center; animation:ia-hum 2.6s ease-in-out infinite; }
-.ia-door { fill:color-mix(in srgb, var(--acc, #22c1d6) 38%, #0e1420); stroke-width:1.4; fill-opacity:.95; }
-.ia-glyph { fill:none; stroke-width:1.3; }
-.ia-visor { stroke-width:2.8; stroke-linecap:round; opacity:.98; }
-.ia-bob { animation:ia-bob 3.4s ease-in-out infinite; }
-.ia-bob-slow { animation-duration:4.6s; }
-.ia-orb { opacity:.95; }
-.ia-orb-shine { fill:rgba(255,255,255,.55); }
-.ia-orbit-ring { fill:none; stroke:var(--acc, #e879f9); stroke-width:.8; stroke-opacity:.4; }
-.ia-clock-face { fill:#141d2c; stroke:rgba(255,255,255,.38); stroke-width:1.3; }
-.ia-clock-tick { fill:rgba(255,255,255,.55); }
-.ia-clock-hand { stroke-width:1.9; stroke-linecap:round; }
-.ia-ping { fill:none; stroke-width:1.2; transform-box:fill-box; transform-origin:center; animation:ia-ping 3s ease-out infinite; opacity:0; }
+.ia-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.ia-mark-top { fill: #38bdf8; }
+.ia-mark-left { fill: #0284c7; }
+.ia-mark-right { fill: #0369a1; }
+.ia-brand-text { display: flex; flex-direction: column; gap: 0; white-space: nowrap; }
+.ia-brand-title { font-weight: 600; font-size: 12.5px; letter-spacing: -0.01em; color: var(--ui-text-primary, #f1f5f9); line-height: 1.15; }
+.ia-brand-meta { font-size: 10px; color: var(--ui-text-quaternary, #64748b); font-variant-numeric: tabular-nums; line-height: 1.15; }
 
-/* health beacons */
-.ia-beacon { stroke:rgba(8,10,16,.8); stroke-width:.8; }
-.ia-beacon-up { animation:ia-beacon-soft 2.6s ease-in-out infinite; }
-.ia-beacon-degraded { animation:ia-beacon-hard 1.2s ease-in-out infinite; }
-.ia-beacon-down { animation:ia-beacon-hard .55s ease-in-out infinite; }
-.ia-beacon-unknown, .ia-beacon-observed { opacity:.5; }
-.ia-alert { fill:none; stroke:var(--ui-danger, #ef4444); stroke-width:1.4; transform-box:fill-box; transform-origin:center; animation:ia-ping 1.8s ease-out infinite; opacity:0; }
-.ia-ripple { fill:none; stroke-width:1.8; transform-box:fill-box; transform-origin:center; animation:ia-ping 1.25s ease-out 3; opacity:0; }
+/* ── segmented filter pills ──────────────────────────────────────────────── */
+.ia-seg {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  flex: 0 0 auto;
+}
+.ia-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--ui-text-secondary, #94a3b8);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.ia-seg-btn:hover { color: var(--ui-text-primary, #f1f5f9); background: rgba(255, 255, 255, 0.04); }
+.ia-seg-active {
+  background: rgba(56, 189, 248, 0.14);
+  color: #e0f2fe;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.32);
+}
+.ia-seg-warn .ia-seg-count {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
+.ia-seg-count {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--ui-text-secondary, #94a3b8);
+  font-variant-numeric: tabular-nums;
+}
 
-/* entrance choreography: platforms rise, nodes drop in by depth wave */
-.ia-enter .ia-lift { animation:ia-drop .62s cubic-bezier(.22,.9,.34,1.18) both; animation-delay:var(--d, 0ms); }
-.ia-enter .ia-shadow { animation:ia-fade .5s ease both; animation-delay:var(--d, 0ms); }
+/* ── top right controls ──────────────────────────────────────────────────── */
+.ia-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ia-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.ia-search-icon {
+  position: absolute;
+  left: 9px;
+  font-size: 12px;
+  color: var(--ui-text-quaternary, #64748b);
+  pointer-events: none;
+}
+.ia-search {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  color: var(--ui-text-primary, #f1f5f9);
+  padding: 5px 20px 5px 24px;
+  font-size: 11px;
+  width: 116px;
+  outline: none;
+  transition: border-color 0.15s ease, width 0.2s ease;
+}
+.ia-search:focus {
+  border-color: rgba(56, 189, 248, 0.55);
+  width: 148px;
+}
+.ia-search::placeholder { color: var(--ui-text-quaternary, #64748b); }
+.ia-search-clear {
+  position: absolute;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: var(--ui-text-quaternary, #64748b);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.ia-search-clear:hover { color: var(--ui-text-primary, #f1f5f9); }
 
-/* live agent overlay: blocked calls shake, reads and touches ripple */
-.ia-pulse-touch_blocked .ia-lift { animation:ia-shake .4s ease-in-out 4; }
-.ia-pulse-touch_allowed .ia-lift { animation:ia-flash-allowed 1.4s ease-out 1; }
-.ia-pulse-read_doc .ia-lift { animation:ia-flash-read 1.4s ease-out 1; }
+/* ── buttons & badges ────────────────────────────────────────────────────── */
+.ia-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(30, 41, 59, 0.65);
+  color: var(--ui-text-primary, #e2e8f0);
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+.ia-btn:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.75);
+  border-color: rgba(148, 163, 184, 0.3);
+}
+.ia-btn:disabled { opacity: 0.5; cursor: default; }
+.ia-btn-primary {
+  background: linear-gradient(180deg, #0284c7 0%, #0369a1 100%);
+  border-color: rgba(125, 211, 252, 0.35);
+  color: #f8fafc;
+  font-weight: 600;
+}
+.ia-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #0ea5e9 0%, #0284c7 100%);
+  border-color: rgba(125, 211, 252, 0.55);
+}
+.ia-btn-ghost {
+  background: rgba(15, 23, 42, 0.45);
+}
+.ia-btn-active {
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(56, 189, 248, 0.12);
+}
+.ia-btn-unlocked {
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #6ee7b7;
+}
+.ia-btn-full { flex: 1 1 100%; }
+.ia-btn-flex { flex: 1 1 0; }
+.ia-btn-xs { padding: 2px 8px; font-size: 10.5px; border-radius: 6px; }
 
-@keyframes ia-rise { 0% { opacity:0; transform:translateY(14px); } 100% { opacity:1; transform:translateY(0); } }
-@keyframes ia-drop { 0% { opacity:0; transform:translateY(-30px); } 55% { opacity:1; transform:translateY(3px); } 76% { transform:translateY(-2px); } 100% { opacity:1; transform:translateY(0); } }
-@keyframes ia-fade { from { opacity:0; } to { opacity:1; } }
-@keyframes ia-flow { to { stroke-dashoffset:-220; } }
-@keyframes ia-ants { to { stroke-dashoffset:-24; } }
-@keyframes ia-glowp { 0%,100% { opacity:.16; } 50% { opacity:.38; } }
-@keyframes ia-led-b { 0%,100% { opacity:1; } 50% { opacity:.25; } }
-@keyframes ia-led-f { 0% { opacity:1; } 50% { opacity:.15; } 62% { opacity:.9; } 74% { opacity:.2; } }
-@keyframes ia-scan { 0% { transform:translateY(0); opacity:0; } 10% { opacity:.85; } 86% { opacity:.85; } 100% { transform:translateY(24px); opacity:0; } }
-@keyframes ia-meniscus { 0%,100% { transform:translate(0,0); opacity:.55; } 50% { transform:translate(1.4px,.7px); opacity:.75; } }
-@keyframes ia-slosh { 0%,100% { transform:translate(0,0); } 25% { transform:translate(1.5px,.8px); } 75% { transform:translate(-1.5px,-.3px); } }
-@keyframes ia-hum { 0%,100% { transform:scale(1); } 50% { transform:scale(1.013); } }
-@keyframes ia-bob { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-5.5px); } }
-@keyframes ia-blink { 0%,100% { opacity:1; } 50% { opacity:.18; } }
-@keyframes ia-ping { 0% { transform:scale(.3); opacity:.9; } 70% { opacity:.4; } 100% { transform:scale(1.75); opacity:0; } }
-@keyframes ia-beacon-soft { 0%,100% { opacity:.95; } 50% { opacity:.45; } }
-@keyframes ia-beacon-hard { 0%,100% { opacity:1; } 50% { opacity:.15; } }
-@keyframes ia-chipf { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-1.6px); } }
-@keyframes ia-burst-fade { 0% { opacity:0; } 12% { opacity:1; } 80% { opacity:.9; } 100% { opacity:0; } }
-@keyframes ia-shake { 0%,100% { transform:translateX(0); } 25% { transform:translateX(-3.5px); } 75% { transform:translateX(3.5px); } }
-@keyframes ia-flash-allowed { 0% { opacity:.45; } 100% { opacity:1; } }
-@keyframes ia-flash-read { 0% { opacity:.45; } 100% { opacity:1; } }
+.ia-icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--ui-text-quaternary, #64748b);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.ia-icon-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--ui-text-primary, #f1f5f9); }
+
+.ia-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 7px;
+}
+
+.ia-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.5);
+}
+.ia-badge-neutral {
+  color: var(--ui-text-secondary, #94a3b8);
+  border-color: rgba(148, 163, 184, 0.18);
+  text-transform: none;
+}
+.ia-badge-danger {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+/* ── policy popover ──────────────────────────────────────────────────────── */
+.ia-pop-anchor { position: relative; }
+.ia-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  padding: 12px;
+  border-radius: 12px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ia-pop-title { font-size: 11px; font-weight: 600; color: var(--ui-text-primary, #f1f5f9); }
+.ia-pop-desc { font-size: 11px; color: var(--ui-text-secondary, #94a3b8); line-height: 1.4; }
+.ia-pop-sep { height: 1px; background: rgba(148, 163, 184, 0.12); margin: 2px 0; }
+.ia-pop-foot { font-size: 10px; color: var(--ui-text-quaternary, #64748b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ia-choice-row { display: flex; gap: 4px; }
+.ia-choice {
+  flex: 1 1 0;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.55);
+  color: var(--ui-text-secondary, #94a3b8);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+.ia-choice:hover { color: var(--ui-text-primary, #f1f5f9); }
+.ia-choice-on {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #e0f2fe;
+}
+
+/* ── floating incident banner ────────────────────────────────────────────── */
+.ia-incident-banner {
+  position: absolute;
+  top: 64px;
+  left: 16px;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: color-mix(in srgb, rgba(127, 29, 29, 0.65) 75%, var(--ui-bg-secondary, #0f1523));
+  max-width: min(520px, calc(100% - 32px));
+}
+.ia-incident-shifted {
+  max-width: calc(100% - 376px);
+}
+.ia-incident-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #ef4444;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.25);
+  animation: ia-beacon-hard 1.4s ease-in-out infinite;
+  flex: 0 0 9px;
+}
+.ia-incident-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ia-incident-line { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ia-incident-err { font-size: 11px; color: #fecaca; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ia-incident-btns { display: flex; gap: 6px; margin-left: 8px; }
+
+/* ── bottom-left activity dock ───────────────────────────────────────────── */
+.ia-activity-dock {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ia-activity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  color: var(--ui-text-primary, #e2e8f0);
+  font-size: 11.5px;
+  max-width: 270px;
+  cursor: pointer;
+}
+.ia-activity-pill:hover { border-color: rgba(148, 163, 184, 0.3); }
+.ia-activity-pill-label { font-weight: 600; flex: 0 0 auto; }
+.ia-activity-peek { color: var(--ui-text-secondary, #94a3b8); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ia-peek-danger { color: #fca5a5; }
+.ia-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #38bdf8;
+  animation: ia-beacon-soft 2s ease-in-out infinite;
+}
+.ia-activity-card {
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  max-height: 280px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ia-activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.ia-activity-head-left { display: flex; align-items: center; gap: 8px; }
+.ia-activity-list {
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ia-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.ia-activity-row:hover { background: rgba(255, 255, 255, 0.05); }
+.ia-activity-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--ui-text-secondary, #94a3b8);
+  flex: 0 0 auto;
+}
+.ia-act-touch_blocked .ia-activity-badge { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+.ia-act-touch_allowed .ia-activity-badge { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+.ia-act-read_doc .ia-activity-badge { background: rgba(6, 182, 212, 0.2); color: #67e8f9; }
+.ia-activity-summary { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ia-activity-time { flex: 0 0 auto; font-size: 10px; color: var(--ui-text-quaternary, #64748b); font-variant-numeric: tabular-nums; }
+
+/* ── bottom-right map controls & legend ──────────────────────────────────── */
+.ia-map-dock {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  transition: right 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ia-map-dock-shifted { right: 358px; }
+.ia-map-bar {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border-radius: 10px;
+}
+.ia-map-btn {
+  border: none;
+  background: transparent;
+  color: var(--ui-text-secondary, #94a3b8);
+  padding: 4px 9px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ia-map-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--ui-text-primary, #f1f5f9); }
+.ia-map-pct { font-size: 10.5px; font-variant-numeric: tabular-nums; min-width: 44px; }
+.ia-map-legend { font-size: 11px; font-weight: 500; }
+.ia-map-sep { width: 1px; height: 16px; background: rgba(148, 163, 184, 0.16); margin: 0 2px; }
+
+.ia-legend-card {
+  width: 260px;
+  padding: 12px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ia-legend-head { display: flex; align-items: center; justify-content: space-between; }
+.ia-legend-sub { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ui-text-quaternary, #64748b); }
+.ia-legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
+.ia-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ui-text-secondary, #94a3b8); white-space: nowrap; }
+
+/* ── slide-over node inspector drawer ────────────────────────────────────── */
+.ia-drawer {
+  position: absolute;
+  top: 64px;
+  right: 16px;
+  bottom: 16px;
+  width: 332px;
+  max-width: calc(100vw - 32px);
+  z-index: 25;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: ia-drawer-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes ia-drawer-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.ia-drawer-head {
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.ia-drawer-title-row { display: flex; align-items: flex-start; gap: 10px; }
+.ia-kind-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+}
+.ia-drawer-titles { flex: 1 1 auto; min-width: 0; }
+.ia-drawer-title { font-size: 14px; font-weight: 600; color: var(--ui-text-primary, #f8fafc); line-height: 1.25; word-break: break-word; }
+.ia-drawer-sub { font-size: 11px; color: var(--ui-text-quaternary, #64748b); margin-top: 2px; }
+.ia-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.ia-drawer-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.ia-drawer-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px;
+  background: rgba(15, 23, 42, 0.35);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.ia-dtab {
+  flex: 1 1 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--ui-text-secondary, #94a3b8);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ia-dtab:hover { color: var(--ui-text-primary, #f1f5f9); }
+.ia-dtab-active {
+  background: rgba(56, 189, 248, 0.14);
+  color: #e0f2fe;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.3);
+}
+
+.ia-drawer-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  user-select: text;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.24) transparent;
+}
+.ia-drawer-body::-webkit-scrollbar, .ia-activity-list::-webkit-scrollbar { width: 6px; }
+.ia-drawer-body::-webkit-scrollbar-track, .ia-activity-list::-webkit-scrollbar-track { background: transparent; }
+.ia-drawer-body::-webkit-scrollbar-thumb, .ia-activity-list::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.22); border-radius: 999px; }
+.ia-drawer-body::-webkit-scrollbar-thumb:hover, .ia-activity-list::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.4); }
+
+.ia-section { display: flex; flex-direction: column; gap: 8px; }
+.ia-section-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ia-section-title { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ui-text-quaternary, #64748b); }
+.ia-section-foot { padding-top: 4px; border-top: 1px solid rgba(148, 163, 184, 0.1); }
+
+.ia-callout {
+  padding: 10px 12px;
+  border-radius: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ia-callout-warn {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+}
+.ia-callout-title { font-size: 10.5px; font-weight: 600; color: #fcd34d; }
+.ia-callout-body { font-size: 11.5px; color: #fef3c7; line-height: 1.45; }
+
+.ia-prop-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.ia-prop {
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  min-width: 0;
+}
+.ia-prop-label { font-size: 9.5px; color: var(--ui-text-quaternary, #64748b); text-transform: uppercase; letter-spacing: 0.04em; }
+.ia-prop-val { font-size: 11.5px; font-weight: 500; color: var(--ui-text-primary, #e2e8f0); margin-top: 2px; overflow-wrap: anywhere; }
+
+.ia-blast-group { display: flex; flex-direction: column; gap: 5px; }
+.ia-blast-label { font-size: 10.5px; color: var(--ui-text-secondary, #94a3b8); }
+.ia-chip-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.ia-node-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  color: var(--ui-text-primary, #e2e8f0);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ia-node-chip:hover { border-color: rgba(56, 189, 248, 0.5); background: rgba(56, 189, 248, 0.1); }
+
+.ia-metric-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.ia-metric {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+.ia-metric-val { font-size: 15px; font-weight: 700; color: var(--ui-text-primary, #f8fafc); font-variant-numeric: tabular-nums; }
+.ia-metric-lbl { font-size: 9.5px; color: var(--ui-text-quaternary, #64748b); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.ia-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 48px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+.ia-spark-bar { flex: 1 1 0; background: #38bdf8; border-radius: 2px; opacity: 0.85; min-height: 4px; }
+.ia-spark-down { background: #ef4444; opacity: 0.95; }
+
+.ia-inc-cards { display: flex; flex-direction: column; gap: 6px; }
+.ia-inc-card {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ia-inc-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; }
+.ia-inc-card-err { font-size: 11px; color: #fca5a5; }
+.ia-inc-card-res { font-size: 11px; color: var(--ui-text-secondary, #94a3b8); }
+
+.ia-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ia-table th { text-align: left; font-weight: 600; font-size: 9.5px; text-transform: uppercase; color: var(--ui-text-quaternary, #64748b); padding: 4px 6px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
+.ia-table td { padding: 5px 6px; border-top: 1px solid rgba(148, 163, 184, 0.08); vertical-align: top; overflow-wrap: anywhere; }
+.ia-td-key { font-weight: 500; color: var(--ui-text-secondary, #94a3b8); }
+.ia-td-live { color: #7dd3fc; }
+
+.ia-runbook {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ui-text-primary, #e2e8f0);
+}
+.ia-json { font-size: 10px; }
+
+.ia-link-btn {
+  border: none;
+  background: transparent;
+  color: #38bdf8;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.ia-link-btn:hover { text-decoration: underline; }
+
+.ia-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--ui-text-secondary, #94a3b8); }
+.ia-muted { color: var(--ui-text-quaternary, #64748b); font-size: 11px; }
+.ia-pad { padding: 12px; }
+.ia-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.ia-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; text-align: center; color: var(--ui-text-quaternary, #64748b); }
+.ia-empty-box { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 320px; }
+.ia-empty-title { font-size: 13px; font-weight: 600; color: var(--ui-text-primary, #e2e8f0); }
+
+/* ── status bar chip & inline cards ──────────────────────────────────────── */
+.ia-chip {
+  font-size: 11px;
+  padding: 1px 9px;
+  border-radius: 999px;
+  color: var(--ui-text-secondary, #94a3b8);
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  cursor: pointer;
+}
+.ia-chip:hover { color: var(--ui-text-primary, #f1f5f9); }
+.ia-chip-alert { color: #fca5a5; border-color: rgba(239, 68, 68, 0.5); }
+.ia-chip-blocked { color: #fca5a5; animation: ia-chip-flash 0.9s ease-in-out 4; }
+@keyframes ia-chip-flash { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.ia-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 11.5px;
+}
+.ia-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ia-card-sub { color: var(--ui-text-quaternary, #64748b); font-size: 11px; }
+
+/* ── isometric scene (untouched 3D diorama styling) ──────────────────────── */
+.ia-plat { animation: ia-rise 0.7s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+.ia-plat-top { fill: color-mix(in srgb, var(--plat, #333a4a) 92%, #ffffff); }
+.ia-plat-left { fill: color-mix(in srgb, var(--plat, #333a4a) 68%, #000000); }
+.ia-plat-right { fill: color-mix(in srgb, var(--plat, #333a4a) 44%, #000000); }
+.ia-plat-0 { --plat: #3d3a47; }
+.ia-plat-1 { --plat: #353c50; }
+.ia-plat-2 { --plat: #3b3550; }
+.ia-plat-3 { --plat: #2f4744; }
+.ia-plat-riser { fill: color-mix(in srgb, var(--plat, #333a4a) 34%, #000000); }
+.ia-plat-grid { fill: none; stroke: rgba(190, 205, 235, 0.13); stroke-width: 1; }
+.ia-plat-edge { fill: none; stroke: rgba(220, 235, 255, 0.16); stroke-width: 1.1; }
+.ia-plat-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.22em; fill: rgba(235, 242, 255, 0.78); paint-order: stroke; stroke: rgba(8, 10, 16, 0.75); stroke-width: 2.2px; }
+
+.ia-edge-line { fill: none; stroke: var(--edge-c, #96a0b5); stroke-width: var(--ew, 1.4); stroke-opacity: 0.78; stroke-linecap: round; animation: ia-flow var(--flow-dur, 24s) linear infinite; }
+.ia-edge:hover .ia-edge-line { stroke-opacity: 1; stroke-width: calc(var(--ew, 1.4) + 0.9); }
+.ia-edge-hot .ia-edge-line { stroke-opacity: 1; stroke-width: calc(var(--ew, 1.4) + 0.8); }
+.ia-edge-dim { opacity: 0.13; transition: opacity 0.3s ease; }
+.ia-edge { transition: opacity 0.3s ease; }
+.ia-edge-head { fill: var(--edge-c, #96a0b5); fill-opacity: 0.85; }
+.ia-edge-hit { fill: none; stroke: transparent; stroke-width: 11; pointer-events: stroke; cursor: pointer; }
+.ia-packet-core { fill: var(--edge-c, #96a0b5); }
+.ia-packet-halo { fill: none; stroke: var(--edge-c, #96a0b5); stroke-width: 1; opacity: 0.45; }
+.ia-burst circle { fill: var(--ui-danger, #ef4444); opacity: 0; animation: ia-burst-fade 1.7s ease-out 3; }
+
+.ia-node { cursor: pointer; }
+.ia-lift { transition: transform 0.18s ease, filter 0.18s ease; }
+.ia-node:hover .ia-lift { transform: translateY(-2.5px); }
+.ia-node-active .ia-lift { transform: translateY(-5px); }
+.ia-f-top { fill: color-mix(in srgb, var(--mat, #424a5e) 84%, #ffffff); stroke: rgba(255, 255, 255, 0.09); stroke-width: 0.6; }
+.ia-f-left { fill: color-mix(in srgb, var(--mat, #424a5e) 74%, #000000); stroke: rgba(255, 255, 255, 0.05); stroke-width: 0.6; }
+.ia-f-right { fill: color-mix(in srgb, var(--mat, #424a5e) 50%, #000000); stroke: rgba(255, 255, 255, 0.04); stroke-width: 0.6; }
+.ia-f-back { fill: color-mix(in srgb, var(--mat, #424a5e) 34%, #000000); stroke: none; }
+.ia-detail { stroke: rgba(255, 255, 255, 0.14); stroke-width: 1; fill: none; }
+.ia-groove { stroke: rgba(0, 0, 0, 0.34); stroke-width: 1; fill: none; }
+.ia-shadow { fill: rgba(3, 6, 14, 0.42); }
+.ia-dglow { opacity: 0.26; animation: ia-glowp 3s ease-in-out infinite; }
+.ia-sel-ring { fill: color-mix(in srgb, var(--ui-accent, #38bdf8) 12%, transparent); stroke: var(--ui-accent, #38bdf8); stroke-width: 1.5; stroke-dasharray: 7 5; animation: ia-ants 1.1s linear infinite; }
+.ia-node-title { font-size: 10px; font-weight: 600; fill: var(--ui-text-primary, currentColor); paint-order: stroke; stroke: rgba(8, 10, 16, 0.92); stroke-width: 3.4px; stroke-linejoin: round; transition: opacity 0.15s ease; }
+.ia-node-compact .ia-node-title { opacity: 0; pointer-events: none; }
+.ia-node-compact:hover .ia-node-title { opacity: 1; }
+.ia-node-sub2 { font-size: 8.5px; fill: #cbd5e1; paint-order: stroke; stroke: rgba(8, 10, 16, 0.92); stroke-width: 3px; stroke-linejoin: round; }
+.ia-chipf { animation: ia-chipf 3.2s ease-in-out infinite; }
+.ia-chip-box { fill: rgba(10, 12, 18, 0.82); stroke-width: 1; }
+.ia-chip-text { font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.ia-alert-base { fill: color-mix(in srgb, var(--ui-danger, #ef4444) 9%, transparent); stroke: var(--ui-danger, #ef4444); stroke-width: 1.3; stroke-dasharray: 4 4; stroke-opacity: 0.85; }
+
+.ia-led { animation: ia-led-b 2.2s ease-in-out infinite; }
+.ia-led-b { animation: ia-led-b 3.4s ease-in-out infinite; }
+.ia-led-f { animation: ia-led-f 1.1s steps(2, jump-none) infinite; }
+.ia-screen { fill: #0b1120; fill-opacity: 0.92; stroke-width: 1; stroke-opacity: 0.75; }
+.ia-scan { stroke: rgba(190, 210, 255, 0.85); stroke-width: 1.6; animation: ia-scan 2.8s linear infinite; }
+.ia-glass { fill: color-mix(in srgb, var(--mat, #4c5262) 34%, #0e1420); }
+path.ia-glass { stroke: rgba(255, 255, 255, 0.16); stroke-width: 1; }
+.ia-liquid { opacity: 0.82; }
+.ia-meniscus { opacity: 0.55; animation: ia-meniscus 3s ease-in-out infinite; }
+.ia-rim { fill: color-mix(in srgb, var(--mat, #4c5262) 20%, #0e1420); stroke-width: 1.6; }
+.ia-glass-shine { fill: rgba(255, 255, 255, 0.12); }
+.ia-hum { transform-box: fill-box; transform-origin: center; animation: ia-hum 2.6s ease-in-out infinite; }
+.ia-door { fill: color-mix(in srgb, var(--acc, #22c1d6) 38%, #0e1420); stroke-width: 1.4; fill-opacity: 0.95; }
+.ia-glyph { fill: none; stroke-width: 1.3; }
+.ia-visor { stroke-width: 2.8; stroke-linecap: round; opacity: 0.98; }
+.ia-bob { animation: ia-bob 3.4s ease-in-out infinite; }
+.ia-bob-slow { animation-duration: 4.6s; }
+.ia-orb { opacity: 0.95; }
+.ia-orb-shine { fill: rgba(255, 255, 255, 0.55); }
+.ia-orbit-ring { fill: none; stroke: var(--acc, #e879f9); stroke-width: 0.8; stroke-opacity: 0.4; }
+.ia-clock-face { fill: #141d2c; stroke: rgba(255, 255, 255, 0.38); stroke-width: 1.3; }
+.ia-clock-tick { fill: rgba(255, 255, 255, 0.55); }
+.ia-clock-hand { stroke-width: 1.9; stroke-linecap: round; }
+.ia-ping { fill: none; stroke-width: 1.2; transform-box: fill-box; transform-origin: center; animation: ia-ping 3s ease-out infinite; opacity: 0; }
+
+.ia-beacon { stroke: rgba(8, 10, 16, 0.8); stroke-width: 0.8; }
+.ia-beacon-up { animation: ia-beacon-soft 2.6s ease-in-out infinite; }
+.ia-beacon-degraded { animation: ia-beacon-hard 1.2s ease-in-out infinite; }
+.ia-beacon-down { animation: ia-beacon-hard 0.55s ease-in-out infinite; }
+.ia-beacon-unknown, .ia-beacon-observed { opacity: 0.5; }
+.ia-alert { fill: none; stroke: var(--ui-danger, #ef4444); stroke-width: 1.4; transform-box: fill-box; transform-origin: center; animation: ia-ping 1.8s ease-out infinite; opacity: 0; }
+.ia-ripple { fill: none; stroke-width: 1.8; transform-box: fill-box; transform-origin: center; animation: ia-ping 1.25s ease-out 3; opacity: 0; }
+
+.ia-enter .ia-lift { animation: ia-drop 0.62s cubic-bezier(0.22, 0.9, 0.34, 1.18) both; animation-delay: var(--d, 0ms); }
+.ia-enter .ia-shadow { animation: ia-fade 0.5s ease both; animation-delay: var(--d, 0ms); }
+
+.ia-pulse-touch_blocked .ia-lift { animation: ia-shake 0.4s ease-in-out 4; }
+.ia-pulse-touch_allowed .ia-lift { animation: ia-flash-allowed 1.4s ease-out 1; }
+.ia-pulse-read_doc .ia-lift { animation: ia-flash-read 1.4s ease-out 1; }
+
+@keyframes ia-rise { 0% { opacity: 0; transform: translateY(14px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes ia-drop { 0% { opacity: 0; transform: translateY(-30px); } 55% { opacity: 1; transform: translateY(3px); } 76% { transform: translateY(-2px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes ia-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ia-flow { to { stroke-dashoffset: -220; } }
+@keyframes ia-ants { to { stroke-dashoffset: -24; } }
+@keyframes ia-glowp { 0%,100% { opacity: 0.16; } 50% { opacity: 0.38; } }
+@keyframes ia-led-b { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+@keyframes ia-led-f { 0% { opacity: 1; } 50% { opacity: 0.15; } 62% { opacity: 0.9; } 74% { opacity: 0.2; } }
+@keyframes ia-scan { 0% { transform: translateY(0); opacity: 0; } 10% { opacity: 0.85; } 86% { opacity: 0.85; } 100% { transform: translateY(24px); opacity: 0; } }
+@keyframes ia-meniscus { 0%,100% { transform: translate(0,0); opacity: 0.55; } 50% { transform: translate(1.4px, 0.7px); opacity: 0.75; } }
+@keyframes ia-slosh { 0%,100% { transform: translate(0,0); } 25% { transform: translate(1.5px, 0.8px); } 75% { transform: translate(-1.5px, -0.3px); } }
+@keyframes ia-hum { 0%,100% { transform: scale(1); } 50% { transform: scale(1.013); } }
+@keyframes ia-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5.5px); } }
+@keyframes ia-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.18; } }
+@keyframes ia-ping { 0% { transform: scale(0.3); opacity: 0.9; } 70% { opacity: 0.4; } 100% { transform: scale(1.75); opacity: 0; } }
+@keyframes ia-beacon-soft { 0%,100% { opacity: 0.95; } 50% { opacity: 0.45; } }
+@keyframes ia-beacon-hard { 0%,100% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes ia-chipf { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-1.6px); } }
+@keyframes ia-burst-fade { 0% { opacity: 0; } 12% { opacity: 1; } 80% { opacity: 0.9; } 100% { opacity: 0; } }
+@keyframes ia-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3.5px); } 75% { transform: translateX(3.5px); } }
+@keyframes ia-flash-allowed { 0% { opacity: 0.45; } 100% { opacity: 1; } }
+@keyframes ia-flash-read { 0% { opacity: 0.45; } 100% { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
   .ia-plat, .ia-edge-line, .ia-packet, .ia-burst, .ia-led, .ia-led-b, .ia-led-f, .ia-scan, .ia-meniscus,
   .ia-hum, .ia-bob, .ia-blink, .ia-ping, .ia-beacon-up, .ia-beacon-degraded, .ia-beacon-down, .ia-alert,
   .ia-chipf, .ia-dglow, .ia-sel-ring, .ia-enter .ia-lift, .ia-enter .ia-shadow,
   .ia-pulse-touch_blocked .ia-lift, .ia-pulse-touch_allowed .ia-lift, .ia-pulse-read_doc .ia-lift,
-  .ia-incident-icon, .ia-live-dot { animation:none; }
-  .ia-packet, .ia-burst { display:none; }
+  .ia-incident-pulse, .ia-live-dot { animation: none; }
+  .ia-packet, .ia-burst { display: none; }
 }
-
-.ia-empty { display:flex; align-items:center; justify-content:center; height:100%; padding:24px; text-align:center; color:#5f6f8f; }
-.ia-inspector { flex:0 0 354px; width:354px; display:flex; flex-direction:column; min-height:0; min-width:0; border-left:1px solid rgba(96,126,190,.2); }
-.ia-inspector .ia-hud-in { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; min-width:0; overflow-y:auto; }
-.ia-inspector-empty { padding:0; }
-.ia-inspector-empty .ia-hud-in { padding:14px; gap:10px; }
-.ia-inspector-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; padding:13px 14px 8px; }
-.ia-inspector-title { font-size:13px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; }
-.ia-inspector-meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:5px; }
-.ia-close { background:transparent; border:none; color:#5f6f8f; cursor:pointer; font-size:12px; }
-.ia-close:hover { color:#9fd8ff; }
-.ia-tabs { display:flex; gap:2px; padding:0 12px; border-bottom:1px solid rgba(96,126,190,.16); }
-.ia-tab { background:transparent; border:none; border-bottom:2px solid transparent; color:#5f6f8f; padding:7px 9px; font-size:10px; text-transform:uppercase; letter-spacing:.08em; cursor:pointer; }
-.ia-tab:hover { color:#9fb0cc; }
-.ia-tab-active { color:#9fd8ff; border-bottom-color:#38bdf8; }
-.ia-tab-body { flex:1 1 auto; overflow:auto; padding:11px 13px; display:flex; flex-direction:column; gap:11px; }
-.ia-inspector-foot { display:flex; gap:6px; padding:9px 13px; border-top:1px solid rgba(96,126,190,.16); background:rgba(10,14,24,.6); }
-.ia-kv { display:flex; flex-direction:column; gap:4px; }
-.ia-kv-row { display:flex; align-items:baseline; font-size:11px; }
-.ia-kv-key { color:#5f6f8f; text-transform:uppercase; font-size:9px; letter-spacing:.1em; flex:0 0 auto; }
-.ia-kv-lead { flex:1 1 auto; min-width:10px; border-bottom:1px dotted rgba(96,126,190,.3); margin:0 7px; transform:translateY(-3px); }
-.ia-kv-value { min-width:0; overflow-wrap:anywhere; color:#bcd2ee; text-align:right; }
-.ia-block { display:flex; flex-direction:column; gap:6px; }
-.ia-block-title { font-size:9px; text-transform:uppercase; letter-spacing:.16em; color:#7fa7d9; }
-.ia-block-title::before { content:'// '; color:#38bdf8; }
-.ia-pitfall { box-shadow:inset 0 0 0 1px rgba(245,158,11,.4); clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px); padding:9px; background:rgba(245,158,11,.08); }
-.ia-list { margin:0; padding-left:14px; display:flex; flex-direction:column; gap:3px; font-size:11px; color:#9fb0cc; }
-.ia-muted { color:#5f6f8f; font-size:11px; }
-.ia-row { display:flex; gap:6px; flex-wrap:wrap; }
-.ia-tag { box-shadow:inset 0 0 0 1px rgba(96,126,190,.35); clip-path:polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px); padding:2px 8px; font-size:8.5px; text-transform:uppercase; letter-spacing:.1em; color:#9fb0cc; background:rgba(17,23,38,.6); }
-.ia-table { width:100%; border-collapse:collapse; font-size:11px; }
-.ia-table th { text-align:left; font-weight:600; text-transform:uppercase; font-size:8.5px; letter-spacing:.12em; color:#5f6f8f; padding:3px 4px; border-bottom:1px solid rgba(96,126,190,.25); }
-.ia-table td { padding:4px; border-top:1px solid rgba(96,126,190,.12); vertical-align:top; overflow-wrap:anywhere; color:#bcd2ee; }
-.ia-stats { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px; }
-.ia-stat { clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px); background:rgba(17,23,38,.7); box-shadow:inset 0 0 0 1px rgba(96,126,190,.22); padding:7px; }
-.ia-stat-value { font-size:13px; font-weight:700; color:#eaf4ff; font-variant-numeric:tabular-nums; }
-.ia-stat-label { font-size:8px; text-transform:uppercase; letter-spacing:.12em; color:#5f6f8f; margin-top:2px; }
-.ia-spark { display:flex; align-items:flex-end; gap:2px; height:44px; }
-.ia-spark-bar { flex:1 1 0; background:#38bdf8; opacity:.8; min-height:4px; }
-.ia-spark-down { background:#ef4444; opacity:.9; }
-.ia-runbook { margin:0; font-size:11px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; background:rgba(10,14,24,.7); box-shadow:inset 0 0 0 1px rgba(96,126,190,.2); padding:9px; max-height:none; color:#bcd2ee; }
-.ia-stream { flex:0 0 auto; max-height:150px; overflow:auto; padding:9px 16px 10px 24px; background:rgba(15,23,40,.55); border-top:1px solid rgba(96,126,190,.4); position:relative; }
-.ia-stream::before { content:''; position:absolute; top:6px; left:9px; width:8px; height:8px; border-top:2px solid rgba(125,211,252,.5); border-left:2px solid rgba(125,211,252,.5); pointer-events:none; }
-.ia-stream::after { content:''; position:absolute; bottom:6px; right:9px; width:8px; height:8px; border-bottom:2px solid rgba(125,211,252,.5); border-right:2px solid rgba(125,211,252,.5); pointer-events:none; }
-.ia-stream-title { font-size:9px; text-transform:uppercase; letter-spacing:.18em; color:#7fa7d9; margin-bottom:5px; display:flex; align-items:center; gap:7px; }
-.ia-live-dot { width:6px; height:6px; flex:0 0 6px; background:#38bdf8; clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%); animation:ia-beacon-soft 1.8s ease-in-out infinite; }
-.ia-stream-rows { display:flex; flex-direction:column; gap:2px; }
-.ia-stream-row { display:flex; gap:8px; font-size:11px; padding:2px 0 2px 10px; border-left:2px solid rgba(96,126,190,.25); }
-.ia-stream-row.ia-kind-touch_blocked { border-left-color:#ef4444; }
-.ia-stream-row.ia-kind-touch_allowed { border-left-color:#10b981; }
-.ia-stream-row.ia-kind-read_doc { border-left-color:#22d3ee; }
-.ia-stream-time { color:#5f6f8f; width:64px; flex:0 0 64px; font-variant-numeric:tabular-nums; }
-.ia-stream-kind { width:96px; flex:0 0 96px; text-transform:uppercase; font-size:8.5px; letter-spacing:.08em; color:#9fb0cc; padding-top:2px; }
-.ia-stream-text { color:#9fb0cc; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ia-kind-touch_blocked .ia-stream-kind, .ia-kind-touch_blocked .ia-stream-text { color:#f87171; }
-.ia-kind-touch_allowed .ia-stream-kind { color:#34d399; }
-.ia-kind-read_doc .ia-stream-kind { color:#22d3ee; }
-.ia-stream-foot { margin-top:5px; font-size:10px; color:#f87171; }
-.ia-chip { font-size:11px; padding:1px 8px; color:#9fb0cc; background:rgba(17,23,38,.7); border:none; box-shadow:inset 0 0 0 1px rgba(96,126,190,.3); clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px); cursor:pointer; }
-.ia-chip:hover { color:#eaf4ff; }
-.ia-chip-alert { color:#fca5a5; box-shadow:inset 0 0 0 1px rgba(239,68,68,.5); }
-.ia-chip-blocked { color:#fca5a5; animation:ia-chip-flash .9s ease-in-out 4; }
-@keyframes ia-chip-flash { 0%,100% { opacity:1; } 50% { opacity:.35; } }
-.ia-json { font-size:10px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
-.ia-card { display:flex; flex-direction:column; gap:6px; font-size:11px; padding:1px; background:rgba(96,146,210,.42); clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px); }
-.ia-card .ia-hud-in { padding:10px 12px; display:flex; flex-direction:column; gap:6px; font-size:11px; }
-.ia-card-head { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
-.ia-card-dot { width:7px; height:7px; clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%); display:inline-block; }
-.ia-card-sub { color:#5f6f8f; }
 `
 
 // ── registration ───────────────────────────────────────────────────────────
@@ -2424,40 +3317,10 @@ export default {
               summary =>
                 host.notify({
                   kind: 'info',
-                  message: summary.demo ? 'Demo fleet reloaded' : `Sweep ${summary.sweep_id} finished in ${summary.duration_ms}ms`
+                  message: `Sweep ${summary.sweep_id} finished in ${summary.duration_ms}ms`
                 }),
               error => host.notify({ kind: 'error', message: `Infra Atlas: ${error.message || error}` })
             )
-          }
-        }
-      },
-      {
-        id: 'demo',
-        area: PALETTE_AREA,
-        data: {
-          id: 'infra-atlas.demo',
-          label: 'Infra Atlas: toggle the sanitized demo fleet',
-          keywords: ['demo', 'fixture', 'sample', 'screenshot'],
-          run: () => {
-            void rest('/health')
-              .then(state =>
-                host
-                  .request('plugins.manage', {
-                    action: 'settings',
-                    key: ID,
-                    values: { demo_mode: !state.demo_mode }
-                  })
-                  .then(() =>
-                    rest('/settings', { method: 'POST', body: { demo_mode: !state.demo_mode } }).then(result => {
-                      host.notify({
-                        kind: 'info',
-                        message: result.ok ? `Demo fleet ${state.demo_mode ? 'off' : 'on'}` : 'Could not switch the fleet'
-                      })
-                      host.navigate(PAGE_PATH)
-                    })
-                  )
-              )
-              .catch(error => host.notify({ kind: 'error', message: `Infra Atlas: ${error.message || error}` }))
           }
         }
       },

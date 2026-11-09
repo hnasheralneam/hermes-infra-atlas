@@ -196,21 +196,11 @@ def test_api_heal_returns_a_brief_and_session_unlock(plugin_home, registry):
 
 
 def test_api_settings_rejects_nothing_and_reloads(plugin_home, registry):
-    _setup(registry, demo_mode=False)
+    _setup(registry)
     api = _load_api()
     result = asyncio.run(api.update_settings({"guardrail_mode": "warn"}))
     assert result["ok"] is True
     assert "guardrail_mode" in result["written"]
-
-
-def test_api_sweep_demo_mode_loads_the_fixture(plugin_home, registry):
-    store = _setup(registry, demo_mode=True, demo_fixture=True)
-    api = _load_api()
-    summary = asyncio.run(api.sweep({"sources": ["fixture"]}))
-    assert summary["demo"] is True
-    nodes = store.list_nodes()
-    assert len(nodes) == 22
-    assert {node["drift_status"] for node in nodes} >= {"matched", "changed", "unregistered", "stale"}
 
 
 def test_automation_blueprint_validates_against_the_cron_validator(plugin_home):

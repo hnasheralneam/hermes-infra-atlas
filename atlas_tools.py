@@ -280,15 +280,6 @@ def infra_bootstrap(args: dict[str, Any], session_id: str = "", task_id: str = "
     mode = str(args.get("mode") or "annotate_existing_kb")
     dry = bool(args.get("dry_run"))
     root = plugin_config.registry_root()
-    if mode == "load_demo_fixture":
-        # Demo mode is a setting; flipping it here makes the next sweep load the fixture.
-        try:
-            if _ctx is not None:
-                _ctx.set_config("demo_mode", True)
-        except Exception:  # noqa: BLE001
-            pass
-        summary = fusion.run_sweep(sources=["fixture"], session_id=_session(session_id, task_id))
-        return _json({"mode": mode, "demo_mode_set": True, "sweep": summary})
     if mode == "scaffold_from_live":
         summary = fusion.run_sweep(sources=["local", "hermes"], session_id=_session(session_id, task_id))
         store = get_store()

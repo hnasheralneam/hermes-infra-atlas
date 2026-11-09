@@ -4,7 +4,7 @@
 //
 // Serves desktop/plugin.js against a browser stub of @hermes/plugin-sdk and
 // mounts the real page with react-dom. ?fleet=stub (default) uses the render
-// smoke fixture; ?fleet=demo loads the sanitized 22-node demo fleet. The
+// smoke fixture; ?fleet=single and ?fleet=flat test degenerate topologies. The
 // control panel can fire guardrail pulses so the animations can be inspected.
 // React itself is loaded from esm.sh via an import map — no build step.
 
@@ -55,13 +55,13 @@ const HTML = `<!doctype html>
 <div id="root"></div>
 <div id="panel">
   <span class="lbl">iso preview</span>
-  <button data-pulse="touch_blocked" class="danger">⛔ pulse: blocked</button>
-  <button data-pulse="touch_allowed">✅ pulse: allowed</button>
-  <button data-pulse="read_doc">📖 pulse: read</button>
+  <button data-pulse="touch_blocked" class="danger">! pulse: blocked</button>
+  <button data-pulse="touch_allowed">✓ pulse: allowed</button>
+  <button data-pulse="read_doc">◉ pulse: read</button>
   <span class="spacer"></span>
   <span class="lbl">fleet:</span>
   <a href="?fleet=stub">stub</a>
-  <a href="?fleet=demo">demo (22 nodes)</a>
+  <a href="?fleet=live">live fleet</a>
   <a href="?fleet=single">single</a>
   <a href="?fleet=flat">flat (no terraces)</a>
 </div>
@@ -137,9 +137,17 @@ export function useQuery(options) {
   const [state, setState] = React.useState(() => cache.get(cacheKey) || { data: undefined, isLoading: true, error: null })
   const refetch = React.useCallback(async () => {
     if (key[1] === 'node') {
-      // the preview only serves the graph fixture; keep node detail empty-ish
-      setState(current => ({ ...current, data: current.data || { node: null }, isLoading: false }))
-      return state
+      try {
+        const q = new URLSearchParams(window.location.search)
+        q.set('id', key[2] || '')
+        const response = await fetch('/node.json?' + q.toString())
+        const data = await response.json()
+        setState({ data, isLoading: false, error: null })
+        return { data }
+      } catch (error) {
+        setState(current => ({ ...current, data: current.data || { node: null }, isLoading: false }))
+        return state
+      }
     }
     try {
       const response = await fetch('/fixture.json' + window.location.search)
@@ -164,20 +172,6 @@ function countsOf(nodes) {
     if (counts[node.drift_status] !== undefined) counts[node.drift_status] += 1
   })
   return counts
-}
-
-async function demoFleet() {
-  const raw = JSON.parse(await readFile(join(here, '..', 'fixtures', 'sample_fleet.json'), 'utf8'))
-  return {
-    nodes: raw.nodes || [],
-    edges: raw.edges || [],
-    incidents: raw.incidents || [],
-    counts: countsOf(raw.nodes || []),
-    fleet: { monitored_nodes: (raw.nodes || []).length, down_nodes: (raw.incidents || []).length, avg_uptime_24h_pct: 99 },
-    last_sweep: null,
-    config: { guardrail_mode: 'block', auto_heal_mode: 'auto', demo_mode: true },
-    activity: []
-  }
 }
 
 // tiny synthetic fleets for the degenerate cases the renderer must survive
@@ -241,13 +235,33 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/fixture.json') {
       const fleet = url.searchParams.get('fleet')
-      const graph =
-        fleet === 'demo' ? await demoFleet()
-          : fleet === 'single' ? singleFleet()
-            : fleet === 'flat' ? flatFleet()
-              : FIXTURE.graph
+      let graph = FIXTURE.graph
+      if (fleet === 'single') graph = singleFleet()
+      else if (fleet === 'flat') graph = flatFleet()
+      else if (fleet === 'live') {
+        try {
+          graph = JSON.parse(await readFile('/home/sysadmin/.hermes/cache/scratch/live_graph.json', 'utf8'))
+        } catch {
+          graph = FIXTURE.graph
+        }
+      }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify(graph))
+      return
+    }
+    if (url.pathname === '/node.json') {
+      const nodeId = url.searchParams.get('id')
+      const fleet = url.searchParams.get('fleet')
+      let pool = FIXTURE.graph.nodes || []
+      if (fleet === 'live') {
+        try {
+          const live = JSON.parse(await readFile('/home/sysadmin/.hermes/cache/scratch/live_graph.json', 'utf8'))
+          pool = live.nodes || pool
+        } catch {}
+      }
+      const found = pool.find(n => n.id === nodeId) || FIXTURE.node.node
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ ...FIXTURE.node, node: found, diff: found.drift_status === 'changed' ? FIXTURE.node.diff : [], incidents: [] }))
       return
     }
     res.writeHead(404, { 'content-type': 'text/plain' })
@@ -259,5 +273,5 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(port, '127.0.0.1', () => {
-  console.log(`iso preview → http://127.0.0.1:${port}/?fleet=stub  (or ?fleet=demo)`)
+  console.log(`iso preview → http://127.0.0.1:${port}/?fleet=stub`)
 })

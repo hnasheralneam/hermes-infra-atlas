@@ -99,7 +99,6 @@ async def health() -> dict[str, Any]:
         "registry": str(config.registry_root()),
         "guardrail_mode": config.guardrail_mode(),
         "auto_heal_mode": config.auto_heal_mode(),
-        "demo_mode": bool(config.setting("demo_mode")),
     }
 
 
@@ -130,12 +129,12 @@ async def graph() -> dict[str, Any]:
             "config": {
                 "guardrail_mode": config.guardrail_mode(),
                 "auto_heal_mode": config.auto_heal_mode(),
-                "demo_mode": bool(config.setting("demo_mode")),
                 "registry_path": str(config.registry_root()),
                 "failure_threshold": int(config.setting("failure_threshold") or 2),
                 "heal_cooldown_sec": int(config.setting("heal_cooldown_sec") or 300),
             },
             "session_reads": store.session_reads(),
+            "activity": store.recent_activity(limit=25),
             "now": time.time(),
         }
     )
@@ -182,6 +181,8 @@ def _field_diff(node: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if right in (None, "", []):
             # The live side simply has nothing to say about this field.
+            continue
+        if field == "managed_by" and {str(left).strip().lower(), str(right).strip().lower()} <= {"host", "proxmox"}:
             continue
         if json.dumps(left, sort_keys=True, default=str) != json.dumps(right, sort_keys=True, default=str):
             diffs.append({"field": field, "doc": left, "live": right})
@@ -350,12 +351,6 @@ async def update_settings(body: dict[str, Any]) -> dict[str, Any]:
     """
     config = _config()
     changed = sorted(key for key in body if key in config.DEFAULTS)
-    if body.get("demo_mode") is not None:
-        fusion = _plugin_module("fusion")
-        fusion.run_sweep(
-            sources=["fixture"] if bool(config.setting("demo_mode")) else ["kb", "local", "hermes"],
-            trigger_auto_heal=False,
-        )
     _broadcast("settings.changed", {"written": changed})
     return {
         "ok": True,
@@ -363,7 +358,6 @@ async def update_settings(body: dict[str, Any]) -> dict[str, Any]:
         "config": {
             "guardrail_mode": config.guardrail_mode(),
             "auto_heal_mode": config.auto_heal_mode(),
-            "demo_mode": bool(config.setting("demo_mode")),
         },
     }
 

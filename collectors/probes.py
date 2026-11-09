@@ -67,8 +67,8 @@ def _unreachable(exc: Any) -> bool:
 def _http_probe(url: str, timeout: float, ip: Optional[str] = None, host: str = "") -> tuple[str, Optional[float], str]:
     started = time.monotonic()
     headers = {"User-Agent": "infra-atlas/0.1"}
-    if ip:
-        headers["Host"] = host  # connect by address, keep the virtual host
+    if ip and url.startswith("http://"):
+        headers["Host"] = host  # connect by address for plain HTTP; keep hostname for HTTPS so TLS SNI matches
         parsed = urlparse(url)
         netloc = ip if not parsed.port else f"{ip}:{parsed.port}"
         url = parsed._replace(netloc=netloc).geturl()

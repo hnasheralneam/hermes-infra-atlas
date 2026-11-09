@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 # Runtime-only node kinds: they exist because Hermes exists, so an entry is
 # optional and their absence from the KB is not drift.
 RUNTIME_KINDS = {"agent", "cron", "model_endpoint", "container"}
+# Hermes runtime nodes live in Stratum 4 and must never be swallowed into Stratum 3/1 doc nodes.
+HERMES_RUNTIME_KINDS = {"agent", "cron", "model_endpoint"}
 # Kinds worth probing even without an explicit probe declaration.
 PROBE_KINDS = {"service", "container", "model_endpoint", "vm", "lxc", "server"}
 
@@ -56,6 +58,8 @@ def _field_diffs(doc: dict[str, Any], live: dict[str, Any]) -> list[dict[str, An
             continue
         if doc_value in (None, "", []) or live_value in (None, "", []):
             continue
+        if field == "managed_by" and {str(doc_value).strip().lower(), str(live_value).strip().lower()} <= {"host", "proxmox"}:
+            continue
         if str(doc_value).strip().lower() != str(live_value).strip().lower():
             diffs.append({"field": field, "doc": doc_value, "live": live_value})
     return diffs
@@ -65,57 +69,112 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
     """Return ``(merged_by_id, matched_doc_ids)``."""
     by_id = {node["id"]: dict(node) for node in doc_nodes}
     index_unit: dict[str, str] = {}
-    index_vmid: dict[tuple[int, str], str] = {}
+    index_vmid: dict[int, str] = {}
     index_host: dict[str, list[str]] = {}
+    index_alias: dict[str, str] = {}
+    documented_vmids: dict[int, str] = {}
     for node in doc_nodes:
         if node.get("systemd_unit"):
             index_unit.setdefault(str(node["systemd_unit"]), node["id"])
         if node.get("vmid"):
-            index_vmid.setdefault((int(node["vmid"]), str(node.get("kind"))), node["id"])
+            documented_vmids.setdefault(int(node["vmid"]), str(node.get("registry_path") or ""))
+            if str(node.get("kind")) in {"server", "vm", "lxc"}:
+                index_vmid.setdefault(int(node["vmid"]), node["id"])
+        for gvmid in node.get("guest_vmids") or []:
+            documented_vmids.setdefault(int(gvmid), str(node.get("registry_path") or ""))
         if node.get("host_ip"):
             index_host.setdefault(str(node["host_ip"]), []).append(node["id"])
+        for alias in node.get("aliases") or []:
+            slug = _slug(alias)
+            if slug:
+                index_alias.setdefault(slug, node["id"])
+                index_alias.setdefault(f"srv-{slug}", node["id"])
 
     matched: set[str] = set()
+    id_remap: dict[str, str] = {}
     for live in live_nodes:
         live_id = str(live.get("id") or "")
         if not live_id:
             continue
+        live_kind = str(live.get("kind") or "")
+        if live_kind in HERMES_RUNTIME_KINDS:
+            by_id[live_id] = dict(live)
+            by_id[live_id]["_runtime"] = True
+            continue
+
         target_id: Optional[str] = None
         if live_id in by_id:
-            target_id = live_id
+            doc_cand = by_id[live_id]
+            # Do not let a tailnet peer or local host overwrite a documented server whose LAN IP differs.
+            if (
+                live_kind in {"server", "vm", "lxc", "peer"}
+                and doc_cand.get("host_ip")
+                and live.get("host_ip")
+                and str(doc_cand["host_ip"]) != str(live["host_ip"])
+            ):
+                target_id = None
+            else:
+                target_id = live_id
+        elif live_id in index_alias:
+            target_id = index_alias[live_id]
+        elif live.get("label") and _slug(str(live["label"])) in index_alias:
+            target_id = index_alias[_slug(str(live["label"]))]
         elif live.get("systemd_unit") and str(live["systemd_unit"]) in index_unit:
             target_id = index_unit[str(live["systemd_unit"])]
-        elif live.get("vmid") and (int(live["vmid"]), str(live.get("kind"))) in index_vmid:
-            target_id = index_vmid[(int(live["vmid"]), str(live.get("kind")))]
-        elif live.get("host_ip") and live.get("ports"):
-            live_kind = str(live.get("kind") or "")
+        elif live.get("vmid") and live_kind in {"server", "vm", "lxc"} and int(live["vmid"]) in index_vmid:
+            target_id = index_vmid[int(live["vmid"])]
+        elif live.get("host_ip"):
             live_family = "host" if live_kind in {"server", "vm", "lxc"} else "workload"
-            for candidate in index_host.get(str(live["host_ip"]), []):
-                doc = by_id[candidate]
-                doc_kind = str(doc.get("kind") or "")
-                doc_family = "host" if doc_kind in {"server", "vm", "lxc"} else "workload"
-                if doc_family != live_family:
-                    continue
-                if set(_ports(doc.get("ports"))) & set(_ports(live.get("ports"))):
-                    target_id = candidate
-                    break
-        if target_id is None and live.get("tailnet_ip") and str(live.get("kind")) in {"server", "vm", "lxc"}:
+            host_candidates = [
+                cand
+                for cand in index_host.get(str(live["host_ip"]), [])
+                if ("host" if str(by_id[cand].get("kind") or "") in {"server", "vm", "lxc"} else "workload") == live_family
+            ]
+            if live.get("ports"):
+                for candidate in host_candidates:
+                    doc = by_id[candidate]
+                    if set(_ports(doc.get("ports"))) & set(_ports(live.get("ports"))):
+                        target_id = candidate
+                        break
+            if target_id is None and live_family == "host" and len(host_candidates) == 1:
+                target_id = host_candidates[0]
+        if target_id is None and live.get("tailnet_ip") and live_kind in {"server", "vm", "lxc", "peer"}:
             for candidate, doc in by_id.items():
                 if str(doc.get("kind")) not in {"server", "vm", "lxc"}:
+                    continue
+                if doc.get("host_ip") and live.get("host_ip") and str(doc["host_ip"]) != str(live["host_ip"]):
                     continue
                 if str(doc.get("tailnet_ip") or "") == str(live["tailnet_ip"]):
                     target_id = candidate
                     break
         if target_id is None:
-            # Runtime nodes and genuinely new hosts are added under their own id.
+            # Runtime nodes, guests backing a documented service/hypervisor VMID, and genuinely new hosts are added under their own id.
             by_id[live_id] = dict(live)
-            if str(live.get("kind")) not in RUNTIME_KINDS:
-                by_id[live_id]["_unregistered"] = True
-            else:
+            if live_kind in RUNTIME_KINDS:
                 by_id[live_id]["_runtime"] = True
+            elif live_kind in {"vm", "lxc"} and live.get("vmid") and int(live["vmid"]) in documented_vmids:
+                by_id[live_id]["_runtime"] = True
+                doc_path = documented_vmids.get(int(live["vmid"]))
+                if doc_path and not by_id[live_id].get("registry_path"):
+                    by_id[live_id]["registry_path"] = doc_path
+            else:
+                by_id[live_id]["_unregistered"] = True
             continue
 
+        if live_id != target_id:
+            id_remap[live_id] = target_id
         merged = by_id[target_id]
+        # A tailnet peer observation enriches tailnet_ip/online status without clobbering server kind/ports.
+        if live_kind == "peer" and str(merged.get("kind")) in {"server", "vm", "lxc"}:
+            if not merged.get("tailnet_ip") and live.get("tailnet_ip"):
+                merged["tailnet_ip"] = live["tailnet_ip"]
+            merged.setdefault("live_state", {})
+            merged["live_state"] = {**(merged.get("live_state") or {}), **(live.get("live_state") or {})}
+            if merged.get("health_status") in (None, "unknown") and live.get("health_status") == "up":
+                merged["health_status"] = "up"
+            matched.add(target_id)
+            continue
+
         merged["_live"] = {**merged.get("_live", {}), **live}
         for key in ("parent_id", "host_ip", "tailnet_ip", "vmid", "systemd_unit", "managed_by", "label"):
             if not merged.get(key) and live.get(key):
@@ -126,13 +185,29 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
         merged["live_state"] = {**(merged.get("live_state") or {}), **(live.get("live_state") or {})}
         matched.add(target_id)
 
-    # A service whose IP matches a known host inherits it as parent.
+    # Remap parent_id when a live host (e.g. srv-bossagent-home) correlated onto a documented server id.
+    if id_remap:
+        for node in by_id.values():
+            pid = node.get("parent_id")
+            if pid and pid in id_remap:
+                node["parent_id"] = id_remap[pid]
+
+    # Link services with a vmid to the corresponding Proxmox guest when present, else inherit host by IP.
+    guest_by_vmid = {
+        int(node["vmid"]): node["id"]
+        for node in by_id.values()
+        if node.get("vmid") and str(node.get("kind")) in {"vm", "lxc"}
+    }
     host_by_ip = {
         str(node.get("host_ip")): node["id"]
         for node in by_id.values()
-        if node.get("host_ip") and int(node.get("stratum") or 9) <= 2
+        if node.get("host_ip") and int(node.get("stratum") or 9) <= 2 and str(node.get("kind")) != "peer"
     }
     for node in by_id.values():
+        if node.get("vmid") and str(node.get("kind")) in {"service", "project"}:
+            guest_id = guest_by_vmid.get(int(node["vmid"]))
+            if guest_id and guest_id != node["id"]:
+                node["parent_id"] = guest_id
         if not node.get("parent_id") and node.get("host_ip") in host_by_ip:
             parent_id = host_by_ip[str(node["host_ip"])]
             if parent_id != node["id"]:
@@ -165,6 +240,8 @@ def _classify(node: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]
         return "matched", [], []
     if live:
         if health == "down":
+            if str(node.get("auto_heal_policy") or "") == "off" and str((live.get("live_state") or {}).get("status") or "") == "stopped":
+                return ("changed", reasons, diff) if diff else ("matched", [], [])
             reasons.append("health: registry says active, but the live unit/probe is failing")
             return "changed", reasons, diff
         return ("changed", reasons, diff) if diff else ("matched", [], [])
@@ -189,7 +266,6 @@ _OWNER_FAMILIES: dict[str, set[str]] = {
     "headscale": {"headscale", "tailscale"},
     "proxmox": {"proxmox"},
     "hermes": {"hermes", "hermes-config", "hermes-cron", "mcp"},
-    "fixture": set(),  # the demo fleet is a view: it never prunes anything
 }
 
 
@@ -205,7 +281,9 @@ def _probe_targets(nodes: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     for node in nodes.values():
         if str(node.get("kind") or "") not in PROBE_KINDS:
             continue
-        if node.get("probe") or (node.get("host_ip") and node.get("ports")):
+        if str(node.get("doc_status") or "active") == "removed":
+            continue
+        if node.get("probe") or (not node.get("registry_path") and node.get("host_ip") and node.get("ports")):
             targets.append(
                 {
                     "id": node["id"],
@@ -231,8 +309,62 @@ def _edges_for(nodes: dict[str, dict[str, Any]], doc_edges: Iterable[dict[str, A
             seen.setdefault((node["parent_id"], node["id"], "hosts"), {
                 "source_id": node["parent_id"], "target_id": node["id"], "relation": "hosts", "origin": "both",
             })
-        if node.get("kind") == "agent":
+
+    # Connect model_endpoint nodes to the infrastructure service/server that serves them.
+    infra_by_addr_port: dict[tuple[str, str], str] = {}
+    infra_by_addr: dict[str, str] = {}
+    for node in nodes.values():
+        if str(node.get("kind") or "") in HERMES_RUNTIME_KINDS or str(node.get("kind") or "") == "peer":
             continue
+        ip = str(node.get("host_ip") or "").strip()
+        if not ip:
+            continue
+        if str(node.get("kind")) in {"server", "vm", "lxc"}:
+            infra_by_addr.setdefault(ip, node["id"])
+        for p in _ports(node.get("ports")):
+            if str(node.get("kind")) == "service":
+                infra_by_addr_port[(ip, p)] = node["id"]
+            else:
+                infra_by_addr_port.setdefault((ip, p), node["id"])
+
+    for node in nodes.values():
+        if str(node.get("kind")) == "model_endpoint":
+            ip = str(node.get("host_ip") or "").strip()
+            if not ip:
+                continue
+            ports = _ports(node.get("ports"))
+            provider_id = None
+            for p in ports:
+                if (ip, p) in infra_by_addr_port:
+                    provider_id = infra_by_addr_port[(ip, p)]
+                    break
+            if not provider_id:
+                provider_id = infra_by_addr.get(ip)
+            if provider_id and provider_id != node["id"]:
+                seen.setdefault((node["id"], provider_id, "depends_on"), {
+                    "source_id": node["id"], "target_id": provider_id, "relation": "depends_on", "origin": "live",
+                })
+        elif str(node.get("kind")) == "cron":
+            live_state = node.get("live_state") or {}
+            haystack = " ".join(
+                str(x or "") for x in (node.get("label"), live_state.get("script"), live_state.get("prompt"))
+            ).lower()
+            if not haystack.strip():
+                continue
+            monitored = 0
+            for cand in nodes.values():
+                if cand["id"] == node["id"] or str(cand.get("kind")) in HERMES_RUNTIME_KINDS or str(cand.get("kind")) == "peer":
+                    continue
+                if not cand.get("registry_path"):
+                    continue
+                stem = str(cand["registry_path"]).rsplit("/", 1)[-1].removesuffix(".md").lower()
+                if len(stem) >= 4 and (stem in haystack or cand["id"].lower() in haystack):
+                    seen.setdefault((node["id"], cand["id"], "monitors"), {
+                        "source_id": node["id"], "target_id": cand["id"], "relation": "monitors", "origin": "live",
+                    })
+                    monitored += 1
+                    if monitored >= 3:
+                        break
     return list(seen.values())
 
 
@@ -250,43 +382,6 @@ def _enabled(source: str) -> bool:
     return False
 
 
-def _apply_demo(store, session_id: str = "") -> dict[str, Any]:
-    from .collectors import fixture as fixture_collector
-
-    payload = fixture_collector.load()
-    store.begin_bulk()
-    try:
-        for node in payload.get("nodes") or []:
-            store.upsert_node({**node})
-        store.replace_edges(payload.get("edges") or [])
-        for incident in payload.get("incidents") or []:
-            rows = store.list_incidents(limit=200, node_id=incident["node_id"])
-            if any(row.get("trigger_error") == incident.get("trigger_error") for row in rows):
-                # Already materialized (possibly resolved since): never reopen it
-                # just because the fixture was reloaded.
-                continue
-            store.create_incident_row(incident)
-        for sample in payload.get("probe_history") or []:
-            store.insert_probe_sample(sample["node_id"], sample.get("status", "up"), sample.get("latency_ms"), sample.get("detail", ""), ts=sample.get("ts"))
-    finally:
-        store.end_bulk()
-    counts = store.counts()
-    sweep_id = store.record_sweep(0, ["fixture"], counts, "demo fleet loaded")
-    return {
-        "sweep_id": sweep_id,
-        "demo": True,
-        "duration_ms": 0,
-        "sources": ["fixture"],
-        "counts": counts,
-        "drift": [
-            {"id": n["id"], "label": n.get("label"), "drift_status": n.get("drift_status"), "reasons": n.get("drift_reasons") or []}
-            for n in store.list_nodes()
-            if n.get("drift_status") != "matched"
-        ],
-        "incidents": {"open": len(store.list_incidents(statuses=["open", "healing", "escalated"]))},
-    }
-
-
 def run_sweep(
     sources: Optional[list[str]] = None,
     probe_timeout: Optional[float] = None,
@@ -296,11 +391,7 @@ def run_sweep(
     """Parse + collect + correlate + classify + persist. Returns a summary."""
     started = time.monotonic()
     store = get_store()
-
-    if plugin_config.setting("demo_mode") and (not sources or sources == ["fixture"]):
-        summary = _apply_demo(store, session_id)
-        summary["duration_ms"] = int((time.monotonic() - started) * 1000)
-        return summary
+    store.purge_fixture_artifacts()
 
     root = plugin_config.registry_root()
     requested = sources or ["kb", "local", "hermes", "proxmox", "headscale", "probes"]
@@ -335,14 +426,16 @@ def run_sweep(
     persisted: list[dict[str, Any]] = []
     transitions: list[tuple[dict[str, Any], Optional[str], list[dict[str, Any]]]] = []
     for node in nodes.values():
-        status, reasons, diffs = _classify(node)
-        node["drift_status"] = status
-        node["drift_reasons"] = reasons
         node.setdefault("health_status", "unknown")
         if node.get("_live") and node["health_status"] == "unknown":
             live_health = (node["_live"].get("health_status") or "").strip()
+            if live_health == "down" and str(node.get("auto_heal_policy") or "") == "off" and str((node["_live"].get("live_state") or {}).get("status") or "") == "stopped":
+                live_health = "unknown"
             if live_health:
                 node["health_status"] = live_health
+        status, reasons, diffs = _classify(node)
+        node["drift_status"] = status
+        node["drift_reasons"] = reasons
         node["live_state"] = {**(node.get("live_state") or {}), **(node.get("_live", {}).get("live_state") or {})}
         node.pop("_live", None)
         node.pop("_unregistered", None)
@@ -372,13 +465,21 @@ def run_sweep(
             # A node that vanished takes its open incidents with it.
             store.close_incidents_for_missing_nodes()
         store.replace_edges(_edges_for(nodes, doc_edges, live.edges))
+        probed_ids = []
         for observation in probe_result.nodes:
+            obs_id = str(observation.get("id") or "")
+            if not obs_id:
+                continue
+            probed_ids.append(obs_id)
             store.insert_probe_sample(
-                str(observation.get("id")),
+                obs_id,
                 str(observation.get("health_status") or "unknown"),
                 observation.get("latency_ms"),
                 str((observation.get("live_state") or {}).get("probe_detail") or ""),
             )
+        if probed_ids:
+            store.recompute_uptime_24h(probed_ids)
+            store.prune_probe_samples(keep_per_node=200, days=7)
     finally:
         store.end_bulk()
 
@@ -410,7 +511,6 @@ def run_sweep(
 
     return {
         "sweep_id": sweep_id,
-        "demo": False,
         "duration_ms": int((time.monotonic() - started) * 1000),
         "sources": [result.source for result in live_results] + (["probes"] if probe_result.nodes else []),
         "errors": [error for result in live_results + [probe_result] for error in result.errors],
@@ -431,19 +531,29 @@ def blast_radius(store, node_id: str, depth: int = 3) -> dict[str, Any]:
     upstream, downstream = set(), set()
     frontier = {node_id}
     for _ in range(max(1, depth)):
-        frontier = {
+        next_up = {
             edge["source_id"]
             for edge in edges
-            if edge["target_id"] in frontier and edge["relation"] in {"hosts", "depends_on", "routes_via"}
-        } - {node_id} - upstream
+            if edge["target_id"] in frontier and edge["relation"] in {"hosts", "routes_via"}
+        } | {
+            edge["target_id"]
+            for edge in edges
+            if edge["source_id"] in frontier and edge["relation"] in {"depends_on", "uses_model"}
+        }
+        frontier = next_up - {node_id} - upstream
         upstream |= frontier
     frontier = {node_id}
     for _ in range(max(1, depth)):
-        frontier = {
+        next_down = {
             edge["target_id"]
             for edge in edges
-            if edge["source_id"] in frontier and edge["relation"] in {"depends_on", "proxies_to", "monitors", "uses_model"}
-        } - {node_id} - downstream
+            if edge["source_id"] in frontier and edge["relation"] in {"hosts", "proxies_to", "monitors"}
+        } | {
+            edge["source_id"]
+            for edge in edges
+            if edge["target_id"] in frontier and edge["relation"] in {"depends_on", "uses_model", "routes_via"}
+        }
+        frontier = next_down - {node_id} - downstream
         downstream |= frontier
     return {
         "upstream": [{"id": nid, "label": (nodes.get(nid) or {}).get("label"), "kind": (nodes.get(nid) or {}).get("kind")} for nid in sorted(upstream)],
