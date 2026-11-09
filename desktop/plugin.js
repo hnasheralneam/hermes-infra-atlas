@@ -14,13 +14,100 @@
 
 import { cn, host, STATUSBAR_AREAS, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, TRANSCRIPT_DIRECTIVE_AREA, useQuery } from '@hermes/plugin-sdk'
 import * as React from 'react'
-import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
+import { jsx, jsxs, Fragment, memo, useMemo, useCallback } from 'react/jsx-runtime'
 
 const ID = 'infra-atlas'
 const PAGE_PATH = '/infra-atlas'
 
 let API = null // ctx, kept for ctx.rest / ctx.storage
 let pendingSelect = null
+
+// ============================================================================
+// PERFORMANCE UTILITIES
+// ============================================================================
+
+/**
+ * Deep equality check for objects/arrays - used for memoization
+ */
+function deepEqual(a, b) {
+  if (a === b) return true
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return false
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  for (const key of keysA) {
+    if (!keysB.includes(key)) return false
+    if (!deepEqual(a[key], b[key])) return false
+  }
+  return true
+}
+
+/**
+ * Create a stable key for a node based on its essential properties
+ */
+function nodeKey(node) {
+  if (!node) return 'null'
+  return `${node.id}:${node.kind}:${node.health_status}:${node.drift_status}:${(node.ports || []).join(',')}`
+}
+
+/**
+ * Create a stable key for an edge
+ */
+function edgeCacheKey(x1, y1, x2, y2) {
+  if (x2 < x1 || (x2 === x1 && y2 < y1)) return `${x2},${y2},${x1},${y1}`
+  return `${x1},${y1},${x2},${y2}`
+}
+
+/**
+ * Debounce function - limits how often a function can be called
+ */
+function debounce(fn, delay) {
+  let timeout
+  return (...args) => {
+    clearTimeout(timeout)
+    timeout = setTimeout(() => fn(...args), delay)
+  }
+}
+
+/**
+ * Throttle function - ensures function is called at most once per period
+ */
+function throttle(fn, limit) {
+  let inThrottle = false
+  return (...args) => {
+    if (!inThrottle) {
+      fn(...args)
+      inThrottle = true
+      setTimeout(() => { inThrottle = false }, limit)
+    }
+  }
+}
+
+// ============================================================================
+// PERFORMANCE CACHES
+// ============================================================================
+
+// Cache for scene plans
+const scenePlanCache = new Map()
+
+// Cache for edge routes
+const edgeRouteCache = new Map()
+const congestionCache = new Map()
+
+// Cache for geometry calculations
+const geometryCache = new Map()
+
+// Cache for shape bodies
+const shapeBodyCache = new Map()
+
+// Clear all caches (call when major changes occur)
+function clearAllCaches() {
+  scenePlanCache.clear()
+  edgeRouteCache.clear()
+  congestionCache.clear()
+  geometryCache.clear()
+  shapeBodyCache.clear()
+}
 
 const DRIFT_ORDER = ['changed', 'unregistered', 'stale', 'observed', 'matched', 'doc_only']
 const DRIFT_LABEL = {
@@ -77,22 +164,80 @@ const addressOf = node => {
   return port ? `${ip || '—'}:${port}` : ip
 }
 
+// OPTIMIZED: Custom hooks with deep equality checking to prevent unnecessary re-renders
 function useGraph(interval = 10000) {
-  return useQuery({
+  const result = useQuery({
     queryKey: ['infra-atlas', 'graph'],
     queryFn: () => rest('/graph'),
     refetchInterval: interval,
     staleTime: 4000
   })
+  
+  // Add custom comparison to avoid re-renders when data hasn't meaningfully changed
+  const prevDataRef = React.useRef(null)
+  const shouldSkip = React.useMemo(() => {
+    const current = result.data
+    const prev = prevDataRef.current
+    
+    if (!prev || !current) {
+      prevDataRef.current = current
+      return false
+    }
+    
+    // Only skip if key data hasn't changed
+    if (!deepEqual(prev.nodes, current.nodes)) return false
+    if (!deepEqual(prev.edges, current.edges)) return false
+    if (!deepEqual(prev.counts, current.counts)) return false
+    if (!deepEqual(prev.incidents, current.incidents)) return false
+    if (!deepEqual(prev.config, current.config)) return false
+    
+    prevDataRef.current = current
+    return true
+  }, [result.data])
+  
+  // Return previous data if we should skip
+  if (shouldSkip && prevDataRef.current) {
+    return { ...result, data: prevDataRef.current }
+  }
+  
+  prevDataRef.current = result.data
+  return result
 }
 
 function useNode(nodeId) {
-  return useQuery({
+  const result = useQuery({
     queryKey: ['infra-atlas', 'node', nodeId],
     queryFn: () => rest(`/node/${encodeURIComponent(nodeId)}`),
     enabled: Boolean(nodeId),
     staleTime: 4000
   })
+  
+  // For node data, we can be more aggressive with caching since it changes less frequently
+  const prevDataRef = React.useRef(null)
+  const shouldSkip = React.useMemo(() => {
+    const current = result.data
+    const prev = prevDataRef.current
+    
+    if (!prev || !current) {
+      prevDataRef.current = current
+      return false
+    }
+    
+    // Skip if node data hasn't changed
+    if (!deepEqual(prev.node, current.node)) return false
+    if (!deepEqual(prev.diff, current.diff)) return false
+    if (!deepEqual(prev.incidents, current.incidents)) return false
+    
+    prevDataRef.current = current
+    return true
+  }, [result.data])
+  
+  if (shouldSkip && prevDataRef.current) {
+    return { ...result, data: prevDataRef.current }
+  }
+  
+  prevDataRef.current = result.data
+  return result
 }
 
 // ── isometric scene ────────────────────────────────────────────────────────
@@ -160,9 +305,24 @@ const byLabel = (a, b) => String(a.label || a.id).localeCompare(String(b.label |
 // Plan the scene: strata → terraced platforms, nodes → tile slots (children
 // clustered under their parent so host edges stay short), plus the occupancy
 // and z maps the edge router walks.
+// OPTIMIZED: Memoized to avoid recomputation when nodes haven't changed
+function sceneCacheKey(nodes) {
+  if (!nodes || nodes.length === 0) return 'empty'
+  return nodes.map(n => nodeKey(n)).join(';')
+}
+
 function planScene(nodes) {
+  const cacheKey = sceneCacheKey(nodes)
+  
+  // Return cached plan if available
+  if (scenePlanCache.has(cacheKey)) {
+    return scenePlanCache.get(cacheKey)
+  }
+  
   if (!nodes.length) {
-    return { platforms: [], placed: new Map(), zAt: () => 0, latticeOk: () => false, hugCost: () => 0, stepAt: () => false, width: 760, height: 420, origin: { x: 0, y: 0 } }
+    const emptyPlan = { platforms: [], placed: new Map(), zAt: () => 0, latticeOk: () => false, hugCost: () => 0, stepAt: () => false, width: 760, height: 420, origin: { x: 0, y: 0 } }
+    scenePlanCache.set(cacheKey, emptyPlan)
+    return emptyPlan
   }
   const byStratum = new Map()
   nodes.forEach(node => {
@@ -318,7 +478,7 @@ function planScene(nodes) {
   maxX += 30
   minY -= 104
   maxY += 10
-  return {
+  const plan = {
     platforms,
     placed,
     occupied,
@@ -331,6 +491,10 @@ function planScene(nodes) {
     height: maxY - minY + ISO.pad * 2,
     origin: { x: ISO.pad - minX, y: ISO.pad - minY }
   }
+  
+  // Cache the result
+  scenePlanCache.set(cacheKey, plan)
+  return plan
 }
 
 // ── edge routing ───────────────────────────────────────────────────────────
@@ -364,7 +528,25 @@ const edgeKey = (x1, y1, x2, y2) => {
   return `${x1},${y1},${x2},${y2}`
 }
 
+// OPTIMIZED: Cached pathfinding with early exits
 function findPath(plan, congestion, start, goal) {
+  // Create cache key for this path
+  const cacheKey = `${start.x},${start.y},${goal.x},${goal.y}`
+  
+  // Check cache first
+  if (edgeRouteCache.has(cacheKey)) {
+    return edgeRouteCache.get(cacheKey)
+  }
+  
+  // Early exit for simple cases
+  const dx = Math.abs(goal.x - start.x)
+  const dy = Math.abs(goal.y - start.y)
+  if (dx + dy <= 2) {
+    const result = [start, goal]
+    edgeRouteCache.set(cacheKey, result)
+    return result
+  }
+  
   const key = (x, y, dir) => (y * 512 + x) * 4 + dir
   const open = []
   const push = item => {
@@ -406,7 +588,11 @@ function findPath(plan, congestion, start, goal) {
   push({ f: heuristic(start.x, start.y), g: 0, x: start.x, y: start.y, dir: -1 })
   let found = null
   let guard = 0
-  while (open.length && guard++ < 60000 && !found) {
+  
+  // Limit search iterations based on distance to improve performance
+  const maxIterations = Math.min(60000, (dx + dy) * 100)
+  
+  while (open.length && guard++ < maxIterations && !found) {
     const current = pop()
     if (current.x === goal.x && current.y === goal.y) {
       found = current
@@ -428,7 +614,7 @@ function findPath(plan, congestion, start, goal) {
         turn +
         joint +
         plan.hugCost(current.x, current.y, nx, ny) +
-        1.15 * (congestion.get(edgeKey(current.x, current.y, nx, ny)) || 0)
+        1.15 * (congestion.get(edgeCacheKey(current.x, current.y, nx, ny)) || 0)
       const next = { g: current.g + cost, x: nx, y: ny, dir: d[2] }
       const nk = key(nx, ny, d[2])
       if (best.has(nk) && best.get(nk) <= next.g) return
@@ -445,6 +631,9 @@ function findPath(plan, congestion, start, goal) {
     tiles.unshift({ x: node.x, y: node.y })
     node = cameFrom.get(key(node.x, node.y, node.dir))
   }
+  
+  // Cache the result
+  edgeRouteCache.set(cacheKey, tiles)
   return tiles
 }
 
@@ -478,8 +667,20 @@ function smoothPath(points) {
   return { d, length, angle, end: last }
 }
 
+// OPTIMIZED: Cached edge routing with congestion tracking
 function routeEdges(edges, plan) {
   if (!plan.platforms.length) return []
+  
+  // Create congestion map key based on edges
+  const edgeListKey = edges.map(e => edgeKey(e)).join(';')
+  const planKey = sceneCacheKey(plan.platforms.map(p => p.t))
+  const cacheKey = `routes:${edgeListKey}:${planKey}`
+  
+  // Return cached result if available
+  if (congestionCache.has(cacheKey)) {
+    return congestionCache.get(cacheKey)
+  }
+  
   const congestion = new Map()
 
   const ordered = edges
@@ -487,7 +688,7 @@ function routeEdges(edges, plan) {
     .filter(({ edge }) => plan.placed.has(edge.source_id) && plan.placed.has(edge.target_id) && edge.source_id !== edge.target_id)
     .sort((a, b) => String(a.edge.source_id).localeCompare(String(b.edge.source_id)) || a.index - b.index)
 
-  return ordered.map(({ edge }) => {
+  const result = ordered.map(({ edge }) => {
     const from = plan.placed.get(edge.source_id)
     const to = plan.placed.get(edge.target_id)
     const dx = to.gx - from.gx
@@ -576,14 +777,26 @@ function routeEdges(edges, plan) {
       style
     }
   })
+  
+  // Cache the result
+  congestionCache.set(cacheKey, result)
+  
+  return result
 }
 
 // ── iso shape primitives ───────────────────────────────────────────────────
 // A box footprint spans ±ax/±ay grid units around the local origin (which sits
 // on the platform surface); h is its pixel height. Corners: A back, B right,
 // C front, D left; *t variants are the top face.
+// OPTIMIZED: Cached to avoid redundant calculations
 
 function boxGeom(ax, ay, h, baseY = 0) {
+  const cacheKey = `${ax},${ay},${h},${baseY}`
+  
+  if (geometryCache.has(cacheKey)) {
+    return geometryCache.get(cacheKey)
+  }
+  
   const raw = [
     [-ax, -ay],
     [ax, -ay],
@@ -601,7 +814,7 @@ function boxGeom(ax, ay, h, baseY = 0) {
   const Ct = up(C)
   const Dt = up(D)
   const path = (...pts) => `M ${pts.map(pt => `${r2(pt.x)} ${r2(pt.y)}`).join(' L ')} Z`
-  return {
+  const result = {
     A, B, C, D, At, Bt, Ct, Dt,
     top: path(At, Bt, Ct, Dt),
     left: path(Dt, Ct, C, D),
@@ -612,6 +825,9 @@ function boxGeom(ax, ay, h, baseY = 0) {
     faceLeft: [Dt, Ct, C, D],
     faceRight: [Ct, Bt, B, C]
   }
+  
+  geometryCache.set(cacheKey, result)
+  return result
 }
 
 const lerp = (p1, p2, f) => ({ x: p1.x + (p2.x - p1.x) * f, y: p1.y + (p2.y - p1.y) * f })
@@ -964,6 +1180,51 @@ function CanvasState({ tone, role = 'status', icon, title, detail, children }) {
   })
 }
 
+// Skeleton loading component for better perceived performance
+function GraphSkeleton() {
+  return jsxs('div', {
+    className: 'ia-skeleton',
+    role: 'status',
+    'aria-live': 'polite',
+    children: [
+      // Header skeleton
+      jsxs('div', {
+        className: 'ia-skeleton-header',
+        children: [
+          jsx('div', { className: 'ia-skeleton-title' }),
+          jsx('div', { className: 'ia-skeleton-controls' })
+        ]
+      }),
+      // Rail skeleton
+      jsx('div', { className: 'ia-skeleton-rail' }),
+      // Canvas skeleton with pulsing animation
+      jsxs('div', {
+        className: 'ia-skeleton-canvas',
+        children: [
+          // Simulate platform terraces
+          jsx('div', { className: 'ia-skeleton-plat' }),
+          jsx('div', { className: 'ia-skeleton-plat' }),
+          jsx('div', { className: 'ia-skeleton-plat' }),
+          // Simulate nodes
+          Array.from({ length: 8 }).map((_, i) =>
+            jsx('div', { 
+              className: 'ia-skeleton-node', 
+              style: { animationDelay: `${i * 0.1}s` } 
+            }, `skeleton-node-${i}`)
+          ),
+          // Simulate edges
+          Array.from({ length: 5 }).map((_, i) =>
+            jsx('div', { 
+              className: 'ia-skeleton-edge', 
+              style: { animationDelay: `${i * 0.15}s` } 
+            }, `skeleton-edge-${i}`)
+          )
+        ]
+      })
+    ]
+  })
+}
+
 // header tooltips, written so someone who never saw the app understands the
 // modes — wording follows the backend hooks (hooks.py, uptime.py)
 const GUARDRAIL_HELP =
@@ -1289,12 +1550,7 @@ function InfraAtlasPage() {
                     ]
                   })
                 : isLoading && !nodes.length
-                  ? jsxs(CanvasState, {
-                      role: 'status',
-                      title: 'Drawing the fleet…',
-                      detail: 'Reading the registry, live state and probe history.',
-                      icon: jsx(LoadMark, {})
-                    })
+                  ? jsx(GraphSkeleton, {})
                   : nodes.length
                     ? visible.length
                       ? jsx(Topology, { nodes: visible, edges, selectedId, onSelect: setSelectedId, pulseFor: nodePulse })
@@ -1418,7 +1674,8 @@ const IsoCubeMark = () =>
   })
 
 // ── topology ───────────────────────────────────────────────────────────────
-function PlatformView({ platform, next, sel }) {
+// OPTIMIZED: Memoized platform components
+const PlatformView = memo(function PlatformView({ platform, next, sel }) {
   const p = platform
   const z = p.z
   const A = { x: projX(p.L, p.P), y: projY(p.L, p.P, z) }
@@ -1434,9 +1691,15 @@ function PlatformView({ platform, next, sel }) {
   const riser = next
     ? `M ${r2(D.x)} ${r2(D.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(projX(next.L + next.W, next.P))} ${r2(projY(next.L + next.W, next.P, next.z))} L ${r2(projX(next.L, next.P))} ${r2(projY(next.L, next.P, next.z))} Z`
     : null
-  let grid = ''
-  for (let gx = p.L + 1; gx < p.L + p.W; gx++) grid += `M ${r2(projX(gx, p.P))} ${r2(projY(gx, p.P, z))} L ${r2(projX(gx, p.P + p.D))} ${r2(projY(gx, p.P + p.D, z))} `
-  for (let gy = p.P + 1; gy < p.P + p.D; gy++) grid += `M ${r2(projX(p.L, gy))} ${r2(projY(p.L, gy, z))} L ${r2(projX(p.L + p.W, gy))} ${r2(projY(p.L + p.W, gy, z))} `
+  
+  // OPTIMIZED: Pre-calculate grid lines once
+  const grid = useMemo(() => {
+    let g = ''
+    for (let gx = p.L + 1; gx < p.L + p.W; gx++) g += `M ${r2(projX(gx, p.P))} ${r2(projY(gx, p.P, z))} L ${r2(projX(gx, p.P + p.D))} ${r2(projY(gx, p.P + p.D, z))} `
+    for (let gy = p.P + 1; gy < p.P + p.D; gy++) g += `M ${r2(projX(p.L, gy))} ${r2(projY(p.L, gy, z))} L ${r2(projX(p.L + p.W, gy))} ${r2(projY(p.L + p.W, gy, z))} `
+    return g
+  }, [p.L, p.P, p.W, p.D, z])
+  
   return jsxs('g', {
     className: cn('ia-plat', `ia-plat-${p.t % 4}`, sel && 'ia-plat-sel'),
     style: { '--t': p.t, animationDelay: `${p.t * 110}ms` },
@@ -1451,11 +1714,12 @@ function PlatformView({ platform, next, sel }) {
       jsx('path', { d: `M ${r2(B.x)} ${r2(B.y)} L ${r2(C.x)} ${r2(C.y)} L ${r2(D.x)} ${r2(D.y)}`, className: 'ia-plat-edge' })
     ]
   })
-}
+})
 
 // stratum labels ride the right end of each terrace's front face; they render
 // after every platform so a lower terrace can never paint over them
-function PlatformLabel({ platform }) {
+// OPTIMIZED: Memoized label
+const PlatformLabel = memo(function PlatformLabel({ platform }) {
   const p = platform
   const C = { x: projX(p.L + p.W, p.P + p.D), y: projY(p.L + p.W, p.P + p.D, p.z) }
   return jsx('text', {
@@ -1466,18 +1730,41 @@ function PlatformLabel({ platform }) {
     transform: `translate(${r2(C.x - 12)} ${r2(C.y + 19)}) matrix(0.894 0.447 0 1 0 0)`,
     children: STRATUM_NAME[p.stratum] || `TIER ${p.stratum}`
   })
-}
+})
 
-function EdgeView({ route, selectedId, hoverId, onSelect, pulseFor, labelHint, onTagShow, onTagMove, onTagHide }) {
+// OPTIMIZED: Memoized EdgeView with stable props
+const EdgeView = memo(function EdgeView({ route, selectedId, hoverId, onSelect, pulseFor, labelHint, onTagShow, onTagMove, onTagHide }) {
   const { edge, style } = route
-  const touches = id => edge.source_id === id || edge.target_id === id
+  const touches = useCallback(id => edge.source_id === id || edge.target_id === id, [edge.source_id, edge.target_id])
   const hot = Boolean(selectedId) && touches(selectedId)
   const nb = !hot && Boolean(hoverId) && touches(hoverId)
   const dim = Boolean(selectedId) && !hot && !nb
   const burst = pulseFor && (pulseFor(edge.source_id) === 'touch_blocked' || pulseFor(edge.target_id) === 'touch_blocked')
-  // landing point of the travelling packet = final vertex of the path
-  const endMatch = /L\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/.exec(route.d)
-  const end = endMatch ? { x: Number(endMatch[1]), y: Number(endMatch[2]) } : route.chevron
+  
+  // OPTIMIZED: Cache regex and end point calculation
+  const end = useMemo(() => {
+    const endMatch = /L\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/.exec(route.d)
+    return endMatch ? { x: Number(endMatch[1]), y: Number(endMatch[2]) } : route.chevron
+  }, [route.d, route.chevron])
+  
+  // OPTIMIZED: Memoized event handlers
+  const handleClick = useCallback(event => {
+    event.stopPropagation()
+    if (onSelect) onSelect(edge.source_id)
+  }, [edge.source_id, onSelect])
+  
+  const handlePointerEnter = useCallback(event => {
+    if (onTagShow) onTagShow(labelHint, style.color, event)
+  }, [labelHint, style.color, onTagShow])
+  
+  const handlePointerMove = useCallback(event => {
+    if (onTagMove) onTagMove(event)
+  }, [onTagMove])
+  
+  const handlePointerLeave = useCallback(() => {
+    if (onTagHide) onTagHide()
+  }, [onTagHide])
+  
   return jsxs('g', {
     className: cn('ia-edge', `ia-edge-${edge.relation}`, hot && 'ia-edge-hot', nb && 'ia-edge-nb', dim && 'ia-edge-dim'),
     style: { '--edge-c': style.color, '--ew': style.width, '--flow-dur': `${style.flow}s` },
@@ -1516,23 +1803,21 @@ function EdgeView({ route, selectedId, hoverId, onSelect, pulseFor, labelHint, o
         d: route.d,
         className: 'ia-edge-hit',
         'aria-label': labelHint,
-        onClick: event => {
-          event.stopPropagation()
-          if (onSelect) onSelect(edge.source_id) // a trace is a real connection: click = inspect its source
-        },
-        onPointerEnter: event => { if (onTagShow) onTagShow(labelHint, style.color, event) },
-        onPointerMove: event => { if (onTagMove) onTagMove(event) },
-        onPointerLeave: () => { if (onTagHide) onTagHide() }
+        onClick: handleClick,
+        onPointerEnter: handlePointerEnter,
+        onPointerMove: handlePointerMove,
+        onPointerLeave: handlePointerLeave
       })
     ]
   })
-}
+})
 
 const ZOOM_MIN = 0.42
 const ZOOM_MAX = 2.4
 const ZOOM_STEP = 1.2
 
-function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
+// OPTIMIZED: Memoized Topology component with useCallback for handlers
+const Topology = memo(function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
   const plan = React.useMemo(() => planScene(nodes), [nodes])
   const routed = React.useMemo(() => routeEdges(edges, plan), [edges, plan])
   const [zoom, setZoom] = React.useState(1)
@@ -1546,49 +1831,53 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
 
   const viewBox = `${-offset.x} ${-offset.y} ${plan.width / zoom} ${plan.height / zoom}`
 
-  const zoomIn = () => setZoom(z => Math.min(ZOOM_MAX, z * ZOOM_STEP))
-  const zoomOut = () => setZoom(z => Math.max(ZOOM_MIN, z / ZOOM_STEP))
-  const resetView = () => {
+  const zoomIn = useCallback(() => setZoom(z => Math.min(ZOOM_MAX, z * ZOOM_STEP)), [])
+  const zoomOut = useCallback(() => setZoom(z => Math.max(ZOOM_MIN, z / ZOOM_STEP)), [])
+  const resetView = useCallback(() => {
     setZoom(1)
     setOffset({ x: 0, y: 0 })
-  }
+  }, [])
 
-  const onPointerDown = event => {
-    const target = event.target
-    if (target && target.closest && (target.closest('[data-node-id]') || target.closest('.ia-edge-hit'))) return
-    setEdgeTag(null)
-    dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y }
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-  }
-  const onPointerMove = event => {
+  // OPTIMIZED: Throttled pointer move for better performance
+  const onPointerMove = useCallback(throttle(event => {
     if (!dragRef.current) return
     const dx = (event.clientX - dragRef.current.x) / zoom
     const dy = (event.clientY - dragRef.current.y) / zoom
     // grab semantics: the paper follows the pointer (viewBox.x = -offset.x)
     setOffset({ x: dragRef.current.ox + dx, y: dragRef.current.oy + dy })
-  }
-  const onPointerUp = () => {
+  }, 16), [zoom])
+
+  const onPointerDown = useCallback(event => {
+    const target = event.target
+    if (target && target.closest && (target.closest('[data-node-id]') || target.closest('.ia-edge-hit'))) return
+    setEdgeTag(null)
+    dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }, [offset.x, offset.y])
+
+  const onPointerUp = useCallback(() => {
     dragRef.current = null
-  }
+  }, [])
 
   // node hover via delegation, so IsoNode stays untouched; setState bails out
   // on identical values, so jittering inside one shape never re-renders
-  const onNodeOver = event => {
+  const onNodeOver = useCallback(event => {
     const g = event.target && event.target.closest && event.target.closest('[data-node-id]')
     if (!g) return
     const id = g.getAttribute('data-node-id')
     if (id !== hoverNode) setHoverNode(id)
-  }
-  const onNodeOut = event => {
+  }, [hoverNode])
+
+  const onNodeOut = useCallback(event => {
     if (!hoverNode) return
     const to = event.relatedTarget
     if (to && to.closest && to.closest('[data-node-id]')) return // still on a shape; over() owns the switch
     setHoverNode(null)
-  }
+  }, [hoverNode])
 
   // relation tag follows the cursor; moves are DOM-only (transform) so hover
   // never triggers a React render storm — state flips only on enter/leave
-  const placeTag = event => {
+  const placeTag = useCallback(event => {
     const el = tagRef.current
     const wrap = wrapRef.current
     if (!el || !wrap) return
@@ -1597,19 +1886,22 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
     const py = event.clientY - rect.top
     const flip = px > rect.width - 200
     el.style.transform = `translate(${Math.round(flip ? px - 196 : px + 14)}px, ${Math.round(py + 16)}px)`
-  }
-  const showTag = (label, color, event) => {
+  }, [])
+
+  const showTag = useCallback((label, color, event) => {
     placeTag(event)
     setEdgeTag({ label, color })
-  }
-  const moveTag = event => {
+  }, [placeTag])
+
+  const moveTag = useCallback(event => {
     if (edgeTag) placeTag(event)
-  }
-  const hideTag = () => setEdgeTag(null)
+  }, [edgeTag, placeTag])
+
+  const hideTag = useCallback(() => setEdgeTag(null), [])
 
   // keyboard pan/zoom on the focused canvas: arrows move the camera, +/− zoom,
   // 0 resets to the default framing
-  const onKeyDown = event => {
+  const onKeyDown = useCallback(event => {
     const key = event.key
     const step = 56 / zoom
     if (key === 'ArrowLeft') { setOffset(o => ({ ...o, x: o.x + step })); event.preventDefault() }
@@ -1619,7 +1911,7 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
     else if (key === '+' || key === '=') { zoomIn(); event.preventDefault() }
     else if (key === '-' || key === '_') { zoomOut(); event.preventDefault() }
     else if (key === '0') { resetView(); event.preventDefault() }
-  }
+  }, [zoom, zoomIn, zoomOut, resetView])
 
   // depth order (painter's algorithm); new ids get the drop-in entrance
   const ordered = React.useMemo(() => {
@@ -1633,6 +1925,29 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
       })
     return list
   }, [plan])
+  
+  // OPTIMIZED: Viewport culling - only render visible nodes
+  const visibleOrdered = React.useMemo(() => {
+    const viewLeft = -offset.x
+    const viewRight = -offset.x + plan.width / zoom
+    const viewTop = -offset.y
+    const viewBottom = -offset.y + plan.height / zoom
+    
+    // Estimate average node size
+    const avgNodeSize = 60
+    
+    return ordered.filter(({ info }) => {
+      const nodeX = projX(info.gx + 0.5, info.gy + 0.5) + plan.origin.x
+      const nodeY = projY(info.gx + 0.5, info.gy + 0.5, info.z || 0) + plan.origin.y
+      
+      return (
+        nodeX + avgNodeSize > viewLeft &&
+        nodeX - avgNodeSize < viewRight &&
+        nodeY + avgNodeSize > viewTop &&
+        nodeY - avgNodeSize < viewBottom
+      )
+    })
+  }, [ordered, offset, zoom, plan])
 
   // direct neighbours of the hovered node, for the hover highlight
   const neighbors = React.useMemo(() => {
@@ -1648,18 +1963,19 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
 
   const selT = selectedId && plan.placed.get(selectedId) ? plan.placed.get(selectedId).t : null
 
-  const notable = node =>
+  const notable = useCallback(node =>
     (node.drift_status && node.drift_status !== 'matched') ||
     node.health_status === 'down' ||
-    node.health_status === 'degraded'
+    node.health_status === 'degraded', [])
+
   const showTitle = zoom >= 0.8
   const showAddress = zoom >= 1.25
 
-  const labelHintOf = route => {
+  const labelHintOf = useCallback(route => {
     const from = plan.placed.get(route.edge.source_id)
     const to = plan.placed.get(route.edge.target_id)
     return `${(from && from.node && from.node.label) || route.edge.source_id} —${route.edge.relation}→ ${(to && to.node && to.node.label) || route.edge.target_id}`
-  }
+  }, [plan])
 
   return jsxs('div', {
     className: 'ia-graph-wrap',
@@ -1707,8 +2023,10 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
                 onTagMove: moveTag,
                 onTagHide: hideTag
               }, route.key)),
-              ordered.map(({ info, fresh }) =>
+              // OPTIMIZED: Only render visible nodes
+              visibleOrdered.map(({ info, fresh }) =>
                 jsx('g', {
+                  key: `node-${info.node.id}`,
                   className: cn(
                     info.node.id === hoverNode && 'ia-hn',
                     hoverNode && neighbors.get(hoverNode) && neighbors.get(hoverNode).has(info.node.id) && 'ia-nb'
@@ -1724,7 +2042,7 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor }) {
                     showAddress,
                     onSelect
                   })
-                }, info.node.id))
+                }))
             ]
           })
         ]
@@ -2796,6 +3114,23 @@ const CSS = `
 .ia-search-in { width:100%; min-width:0; border:0; outline:0; background:transparent; color:#eaf4ff; font:inherit; font-size:11px; }
 .ia-search-in::placeholder { color:#5f6f8f; }
 .ia-search-kbd { flex:0 0 auto; min-width:14px; padding:1px 4px; border:1px solid #3a4c6b; color:#8fa3c1; font:inherit; font-size:9px; line-height:14px; text-align:center; }
+/* Skeleton loading animation */
+@keyframes ia-skeleton-pulse {
+  0%, 100% { opacity: .4; }
+  50% { opacity: .8; }
+}
+.ia-skeleton { display:flex; flex-direction:column; height:100%; padding:14px; gap:12px; }
+.ia-skeleton-header { display:flex; justify-content:space-between; align-items:center; height:54px; gap:14px; }
+.ia-skeleton-title { width:200px; height:24px; background:rgba(125,211,252,.1); border-radius:4px; animation:ia-skeleton-pulse 1.5s ease-in-out infinite; }
+.ia-skeleton-controls { width:300px; height:28px; background:rgba(125,211,252,.1); border-radius:4px; animation:ia-skeleton-pulse 1.5s ease-in-out infinite; animation-delay:.2s; }
+.ia-skeleton-rail { height:38px; width:200px; background:rgba(125,211,252,.1); border-radius:4px; animation:ia-skeleton-pulse 1.5s ease-in-out infinite; animation-delay:.4s; }
+.ia-skeleton-canvas { flex:1; position:relative; overflow:hidden; background:#0b0f1a; }
+.ia-skeleton-plat { position:absolute; height:60px; width:80%; background:rgba(96,126,190,.1); border-radius:2px; animation:ia-skeleton-pulse 1.5s ease-in-out infinite; }
+.ia-skeleton-plat:nth-child(1) { top:20%; animation-delay:.1s; }
+.ia-skeleton-plat:nth-child(2) { top:45%; animation-delay:.3s; }
+.ia-skeleton-plat:nth-child(3) { top:70%; animation-delay:.5s; }
+.ia-skeleton-node { position:absolute; width:40px; height:40px; background:rgba(125,211,252,.2); border-radius:50%; animation:ia-skeleton-pulse 1.5s ease-in-out infinite; }
+.ia-skeleton-edge { position:absolute; height:2px; width:100px; background:rgba(150,160,181,.3); border-radius:1px; animation:ia-skeleton-pulse 1.5s ease-in-out infinite; }
 .ia-search-clear { flex:0 0 auto; width:20px; height:20px; padding:0; border:0; background:transparent; color:#8fa3c1; cursor:pointer; font:inherit; font-size:16px; line-height:1; }
 .ia-search-clear:hover { color:#fff; background:#263652; }
 .ia-select { display:flex; align-items:center; gap:5px; font-size:8px; text-transform:uppercase; letter-spacing:.12em; color:#7184a4; white-space:nowrap; }
@@ -2847,8 +3182,44 @@ const CSS = `
 .ia-load-diamond { width:9px; height:9px; background:#38bdf8; transform:rotate(45deg); animation:ia-load-step 1s ease-in-out infinite; }
 @keyframes ia-load-step { 0%,100% { opacity:.25; transform:rotate(45deg) translateY(0); } 50% { opacity:1; transform:rotate(45deg) translateY(-3px); } }
 @media (prefers-reduced-motion: reduce) { .ia-load-diamond { animation:none; opacity:.7; } }
-@media (max-width: 980px) { .ia-header { grid-template-columns:1fr auto; } .ia-controls { grid-column:1 / -1; grid-row:2; justify-content:flex-start; } .ia-status { position:absolute; right:14px; top:14px; } }
-@media (max-width: 620px) { .ia-header { display:flex; align-items:flex-start; } .ia-status { position:static; margin-left:auto; flex-wrap:wrap; } .ia-search { width:min(100%, 260px); } .ia-select { display:none; } .ia-rail-info { width:100%; margin-top:2px; } }
+@media (max-width: 1200px) { 
+  .ia-inspector { flex:0 0 300px; width:300px; }
+}
+@media (max-width: 1024px) {
+  .ia-header { grid-template-columns:1fr auto; }
+  .ia-controls { grid-column:1 / -1; grid-row:2; justify-content:flex-start; }
+  .ia-status { position:absolute; right:14px; top:14px; }
+  .ia-inspector { flex:0 0 280px; width:280px; }
+}
+@media (max-width: 768px) {
+  .ia-header { display:flex; align-items:flex-start; flex-wrap:wrap; }
+  .ia-status { position:static; margin-left:auto; flex-wrap:wrap; }
+  .ia-search { width:min(100%, 260px); }
+  .ia-select { display:none; }
+  .ia-rail-info { width:100%; margin-top:2px; }
+  .ia-inspector { flex:0 0 100%; width:100%; max-height:50vh; border-left:none; border-top:1px solid rgba(96,126,190,.2); }
+  .ia-canvas { min-width:0; }
+  .ia-zoom { right:auto; left:12px; }
+}
+@media (max-width: 620px) {
+  .ia-controls { flex-wrap:wrap; gap:4px; }
+  .ia-btn { padding:4px 8px; font-size:9px; }
+  .ia-search { width:min(100%, 200px); }
+  .ia-title-word { font-size:12px; }
+}
+@media (max-width: 480px) {
+  .ia-search { width:min(100%, 160px); }
+  .ia-status-chip { font-size:8px; padding:2px 4px; }
+  .ia-pill { font-size:9px; padding:2px 6px; }
+}
+/* Touch targets for mobile - ensure minimum 44x44px tap area */
+@media (hover: none) and (pointer: coarse) {
+  .ia-btn { min-height:44px; min-width:44px; }
+  .ia-pill { min-height:44px; padding:8px 12px; }
+  .ia-node { cursor:pointer; }
+  .ia-edge-hit { stroke-width:20px; }
+  .ia-search-in { font-size:14px; }
+}
 /* incident strip: full-width alert bar — solid severity field, per-incident rows */
 .ia-incident { display:flex; gap:12px; align-items:center; padding:8px 14px; flex:0 0 auto; color:#ffd7d7; background:rgba(239,68,68,.09); border-bottom:1px solid rgba(239,68,68,.4); }
 .ia-incident-badge { flex:0 0 auto; display:flex; flex-direction:column; align-items:center; gap:2px; padding:6px 12px 5px; background:var(--ui-danger, #ef4444); color:#fff; clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px); }
@@ -2967,9 +3338,25 @@ const CSS = `
 
 .ia-node { cursor:pointer; outline:none; }
 .ia-node:focus-visible .ia-sel-ring { display:block; stroke:#f8fbff; stroke-width:2.2; stroke-dasharray:4 3; }
-.ia-lift { transition:transform .18s ease, filter .18s ease; }
+.ia-lift { transition:transform .18s ease, filter .18s ease; will-change: transform, filter; }
 .ia-node:hover .ia-lift { transform:translateY(-2.5px); }
 .ia-node-active .ia-lift { transform:translateY(-5px); }
+.ia-node { will-change: transform; }
+.ia-edge-line { will-change: stroke-opacity, stroke-width; }
+.ia-packet { will-change: transform; }
+.ia-beacon { will-change: fill, opacity; }
+.ia-led, .ia-led-b, .ia-led-f { will-change: opacity, fill; }
+.ia-scan { will-change: transform, opacity; }
+.ia-liquid { will-change: transform; }
+.ia-meniscus { will-change: transform, opacity; }
+.ia-hum { will-change: transform; }
+.ia-bob, .ia-bob-slow { will-change: transform; }
+.ia-ping { will-change: transform, opacity; }
+.ia-beacon-up, .ia-beacon-degraded, .ia-beacon-down { will-change: opacity; }
+.ia-alert { will-change: transform, opacity; }
+.ia-ripple { will-change: transform, opacity; }
+.ia-chipf { will-change: transform; }
+.ia-dglow { will-change: opacity; }
 .ia-f-top { fill:color-mix(in srgb, var(--mat, #424a5e) 84%, #ffffff); stroke:rgba(255,255,255,.09); stroke-width:.6; }
 .ia-f-left { fill:color-mix(in srgb, var(--mat, #424a5e) 74%, #000000); stroke:rgba(255,255,255,.05); stroke-width:.6; }
 .ia-f-right { fill:color-mix(in srgb, var(--mat, #424a5e) 50%, #000000); stroke:rgba(255,255,255,.04); stroke-width:.6; }
