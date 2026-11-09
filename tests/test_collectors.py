@@ -177,3 +177,65 @@ def test_an_unresolvable_host_does_not_stall_the_sweep(plugin_home):
     assert elapsed < 8, f"probe sweep took {elapsed:.1f}s on an unresolvable host"
     assert {node["id"] for node in result.nodes} == {"n-dns", "n-tcp"}
     assert all(node["health_status"] in {"unknown", "down"} for node in result.nodes)
+
+
+def test_a_url_probe_targets_its_host_not_its_scheme(plugin_home):
+    """Regression: "http://10.0.0.143:3017/" was parsed as host "http://10.0.0.143".
+
+    Every URL probe then failed resolution and the whole fleet looked down.
+    """
+    H.load_plugin()
+    probes = H.submodule("collectors.probes")
+
+    assert probes._host_of("http://10.0.0.143:3017/") == "10.0.0.143"
+    assert probes._host_of("https://ctf.example.edu/health") == "ctf.example.edu"
+    assert probes._host_of("10.0.0.143:3017") == "10.0.0.143"
+    assert probes._host_of("tcp://[fd00::1]:80") == "[fd00::1]"
+    assert probes._is_ip_literal("10.0.0.143")
+    assert not probes._is_ip_literal("ctf.example.edu")
+
+    # A literal-IP URL must be probed directly: a closed port is "down", not
+    # "hostname did not resolve".
+    result = probes.collect([{"id": "n-ip", "probe": "http://127.0.0.1:9/"}], timeout=0.8)
+    node = result.nodes[0]
+    assert node["health_status"] == "down", node
+    assert "did not resolve" not in str(node["live_state"].get("probe_detail"))
+
+
+def test_any_declared_port_answering_means_the_node_is_up(plugin_home):
+    """Forgejo's entry lists LDAP 389 before its HTTP port; probing only the
+    first port reported a healthy service as down."""
+    import socket
+
+    H.load_plugin()
+    probes = H.submodule("collectors.probes")
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    live_port = server.getsockname()[1]
+    try:
+        result = probes.collect(
+            [{"id": "n-multi", "host_ip": "127.0.0.1", "ports": ["9", str(live_port)]}], timeout=0.8
+        )
+    finally:
+        server.close()
+
+    node = result.nodes[0]
+    assert node["health_status"] == "up", node["live_state"].get("probe_detail")
+
+
+def test_unreachable_is_not_the_same_as_down(plugin_home):
+    """A probe run from the wrong network must not declare a service dead."""
+    H.load_plugin()
+    probes = H.submodule("collectors.probes")
+
+    # Reserved TEST-NET-1 address: the packet goes nowhere, nothing refuses it.
+    result = probes.collect([{"id": "n-unreach", "probe": "tcp://192.0.2.1:9"}], timeout=0.6)
+    node = result.nodes[0]
+    assert node["health_status"] == "unknown", node["live_state"].get("probe_detail")
+    assert "unreachable" in str(node["live_state"].get("probe_detail"))
+
+    # A closed port on a host that answers is a real outage.
+    result = probes.collect([{"id": "n-refused", "probe": "tcp://127.0.0.1:9"}], timeout=0.6)
+    assert result.nodes[0]["health_status"] == "down"

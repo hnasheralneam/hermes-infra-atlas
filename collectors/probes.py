@@ -8,6 +8,8 @@ failure-streak decision, so this module only reports what it saw.
 from __future__ import annotations
 
 import concurrent.futures
+import errno
+import ipaddress
 import logging
 import socket
 import ssl
@@ -36,11 +38,30 @@ def _target_of(node: dict[str, Any]) -> Optional[tuple[str, str, Optional[str]]]
             return "tcp", probe[len("tcp://"):], probe
         if ":" in probe and " " not in probe:
             return "tcp", probe, f"tcp://{probe}"
+    candidates = _tcp_candidates(node)
+    return candidates[0] if candidates else None
+
+
+def _tcp_candidates(node: dict[str, Any], limit: int = 4) -> list[tuple[str, str, Optional[str]]]:
+    """Every address worth trying for a node without an explicit ``probe:``.
+
+    An entry's port list mixes its own ports with neighbours'. Probing only the
+    first one reported healthy services as down, so each declared port is tried
+    and any answer means the node is up.
+    """
     host = node.get("host_ip") or node.get("tailnet_ip")
-    ports = node.get("ports") or []
-    if host and ports:
-        return "tcp", f"{host}:{ports[0]}", f"tcp://{host}:{ports[0]}"
-    return None
+    if not host:
+        return []
+    ports = [str(port) for port in (node.get("ports") or []) if str(port).strip().isdigit()]
+    return [("tcp", f"{host}:{port}", f"tcp://{host}:{port}") for port in ports[:limit]]
+
+
+def _unreachable(exc: Any) -> bool:
+    """True when the failure is 'cannot get there from here', not 'it is down'."""
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    code = getattr(exc, "errno", None)
+    return code in {errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN, errno.ETIMEDOUT}
 
 
 def _http_probe(url: str, timeout: float, ip: Optional[str] = None, host: str = "") -> tuple[str, Optional[float], str]:
@@ -67,6 +88,8 @@ def _http_probe(url: str, timeout: float, ip: Optional[str] = None, host: str = 
         return ("degraded" if exc.code >= 500 else "up"), latency, f"HTTP {exc.code}"
     except (urllib.error.URLError, socket.timeout, OSError, ssl.SSLError) as exc:
         reason = getattr(exc, "reason", exc)
+        if _unreachable(reason):
+            return "unknown", None, f"HTTP unreachable from this host: {reason}"[:200]
         return "down", None, f"HTTP probe failed: {reason}"[:200]
 
 
@@ -79,13 +102,39 @@ def _tcp_probe(address: str, timeout: float, ip: Optional[str] = None) -> tuple[
         with socket.create_connection(((ip or host), int(port_text)), timeout=timeout):
             latency = (time.monotonic() - started) * 1000
             return "up", latency, f"TCP {port_text} connected"
+    except ConnectionRefusedError:
+        # The host answered and nothing is listening on that port: a real outage.
+        return "down", None, f"TCP {port_text} refused"
     except (socket.timeout, OSError) as exc:
+        if _unreachable(exc):
+            # No route, or the packet died: this vantage point cannot see the node,
+            # which is not the same as the node being down.
+            return "unknown", None, f"TCP {port_text} unreachable from this host: {exc}"[:200]
         return "down", None, f"TCP {port_text} failed: {exc}"[:200]
 
 
 def _host_of(address: str) -> str:
-    host, _, _port = address.rpartition(":")
-    return host or address
+    """Hostname of a probe target, whether it is a bare host:port or a URL.
+
+    rpartition(":") alone turned "http://10.0.0.143:3017/" into the "hostname"
+    "http://10.0.0.143", which then failed to resolve — every URL probe reported
+    "hostname did not resolve" and the fleet looked down.
+    """
+    text = str(address or "").strip()
+    if text.startswith(("http://", "https://")):
+        return urlparse(text).hostname or ""
+    if text.startswith("tcp://"):
+        text = text[len("tcp://"):]
+    host, _, _port = text.rpartition(":")
+    return host or text
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(str(host or "").strip().strip("[]"))
+        return True
+    except ValueError:
+        return False
 
 
 def resolve_hosts(hosts: list[str], timeout: float = 1.0) -> dict[str, Optional[str]]:
@@ -137,7 +186,17 @@ def probe_node(node: dict[str, Any], timeout: float = DEFAULT_TIMEOUT, ip: Optio
     if kind == "http":
         status, latency, detail = _http_probe(address, timeout, ip=ip, host=_host_of(address))
     else:
-        status, latency, detail = _tcp_probe(address, timeout, ip=ip)
+        candidates = _tcp_candidates(node) or [(kind, address, probe_url)]
+        attempts = [(candidate, _tcp_probe(candidate[1], timeout, ip=ip)) for candidate in candidates]
+        up = [attempt for _candidate, attempt in attempts if attempt[0] == "up"]
+        if up:
+            status, latency, detail = up[0]
+        else:
+            status, latency, detail = attempts[0][1]
+            if len(attempts) > 1:
+                detail = "; ".join(
+                    f"{candidate[1].rsplit(':', 1)[-1]}: {attempt[2]}" for candidate, attempt in attempts
+                )[:200]
     incident_eligible = declared or str(node.get("kind") or "") == "model_endpoint"
     return {
         "id": node_id,
@@ -168,7 +227,7 @@ def collect(targets: list[dict[str, Any]], timeout: Optional[float] = None) -> C
         if not target:
             continue
         host = _host_of(target[1])
-        if host and not host.replace(".", "").isdigit():
+        if host and not _is_ip_literal(host):
             hosts.append(host)
     resolved = resolve_hosts(sorted(set(hosts)), timeout=min(1.5, max(0.3, budget)))
     unresolved = {host for host, ip in resolved.items() if not ip}

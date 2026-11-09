@@ -175,6 +175,10 @@ def _classify(node: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]
     # must never be invented.
     if kind == "project" or not node.get("_probed") or not (node.get("probe") or (node.get("host_ip") and node.get("ports"))):
         return "doc_only", [], []
+    if health == "unknown":
+        # The probe could not reach the node from this host (no route, timeout):
+        # that says nothing about the node, so it is not drift.
+        return "doc_only", [], []
     return "stale", ["registry says active, nothing answered the probe"], []
 
 

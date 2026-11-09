@@ -700,10 +700,14 @@ class AtlasStore:
     def fleet_uptime(self) -> dict[str, Any]:
         with self._lock:
             row = self._run(
-                "SELECT AVG(uptime_24h_pct) AS avg, COUNT(*) AS nodes FROM nodes WHERE uptime_24h_pct IS NOT NULL"
+                "SELECT AVG(uptime_24h_pct) AS avg, COUNT(*) AS nodes FROM nodes "
+                "WHERE uptime_24h_pct IS NOT NULL AND kind != 'peer'"
             ).fetchone()
+            # Tailnet peers are devices, not fleet: an offline laptop must not
+            # inflate the outage count. Documented nodes are what we own.
             down = self._run(
-                "SELECT COUNT(*) AS n FROM nodes WHERE health_status = 'down'"
+                "SELECT COUNT(*) AS n FROM nodes WHERE health_status = 'down' "
+                "AND kind != 'peer' AND registry_path IS NOT NULL AND registry_path != ''"
             ).fetchone()
         return {
             "avg_uptime_24h_pct": round(float(row["avg"] or 100.0), 2) if row else 100.0,
