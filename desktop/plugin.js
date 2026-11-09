@@ -864,8 +864,9 @@ const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, 
   const title = truncate(cleanLabel, 16)
   const sub = addressOf(node) || node.kind || ''
   const top = scene.top
+  const retired = String((node.doc_state && node.doc_state.status) || node.doc_status || '') === 'removed'
   return jsxs('g', {
-    className: cn('ia-node', `ia-kind-${node.kind}`, active && 'ia-node-active', !showTitle && 'ia-node-compact', pulse && `ia-pulse-${pulse}`, fresh && 'ia-enter'),
+    className: cn('ia-node', `ia-kind-${node.kind}`, retired && 'ia-node-retired', active && 'ia-node-active', !showTitle && 'ia-node-compact', pulse && `ia-pulse-${pulse}`, fresh && 'ia-enter'),
     transform: `translate(${r2(projX(info.gx + 0.5, info.gy + 0.5))} ${r2(projY(info.gx + 0.5, info.gy + 0.5, info.z || 0))})`,
     'data-node-id': node.id,
     onClick: event => {
@@ -1291,7 +1292,13 @@ function InfraAtlasPage() {
   const attentionCount = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
   const activeCount = (counts.matched || 0) + attentionCount
 
-  const visible = nodes.filter(node => {
+  // A retired entry documents something that no longer exists: drawing it as an
+  // empty box on the hardware terrace is noise, and its panel has no telemetry
+  // to show. Keep the map to infrastructure that is (or should be) real.
+  const isRetired = node => String((node.doc_state && node.doc_state.status) || node.doc_status || '') === 'removed'
+  const sceneNodes = nodes.filter(node => !isRetired(node))
+
+  const visible = sceneNodes.filter(node => {
     const group = DRIFT_GROUP[node.drift_status] || 'other'
     if (filter === 'active' && group === 'other') return false
     if (filter === 'matched' && group !== 'matched') return false
@@ -1304,7 +1311,7 @@ function InfraAtlasPage() {
   })
 
   // Fall back to all nodes when a small synthetic fleet has only doc_only/peer items
-  const displayNodes = visible.length || search.trim() || filter !== 'active' ? visible : nodes
+  const displayNodes = visible.length || search.trim() || filter !== 'active' ? visible : sceneNodes
 
   const selected = nodes.find(node => node.id === selectedId) || null
 
@@ -1419,7 +1426,7 @@ function InfraAtlasPage() {
               segButton('active', 'Live', activeCount, filter, setFilter),
               segButton('attention', 'Alerts', attentionCount, filter, setFilter, attentionCount > 0 ? 'warn' : ''),
               segButton('matched', 'Synced', counts.matched || 0, filter, setFilter),
-              segButton('all', 'All', counts.total || 0, filter, setFilter)
+              segButton('all', 'All', sceneNodes.length, filter, setFilter)
             ]
           }),
 
@@ -1650,6 +1657,10 @@ function InfraAtlasPage() {
                         ]
                       }, rel)
                     })
+                  }),
+                  jsx('div', {
+                    className: 'ia-legend-note',
+                    children: `${nodes.length - sceneNodes.length} retired entr${nodes.length - sceneNodes.length === 1 ? 'y' : 'ies'} hidden from the map (still in the registry).`
                   })
                 ]
               })
@@ -1885,6 +1896,10 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
 
   const needsAdoption = drift === 'changed' || drift === 'unregistered'
   const isDown = health === 'down' || incidents.some(inc => inc.status === 'open' || inc.status === 'healing')
+  // A retired entry is documentation of something that is gone, not a node we
+  // expect to answer: it has no health, no uptime and nothing to heal.
+  const docStatus = String((item.doc_state && item.doc_state.status) || item.doc_status || 'active')
+  const isRetired = docStatus === 'removed'
 
   return jsxs('aside', {
     className: 'ia-drawer ia-glass',
@@ -1913,31 +1928,45 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
 
           jsxs('div', {
             className: 'ia-badges',
-            children: [
-              jsx('span', {
-                className: 'ia-badge',
-                style: { borderColor: DRIFT_COLOR[drift], color: DRIFT_COLOR[drift] },
-                children: DRIFT_LABEL[drift] || drift
-              }),
-              jsx('span', {
-                className: 'ia-badge',
-                style: { borderColor: HEALTH_COLOR[health], color: HEALTH_COLOR[health] },
-                children: health
-              }),
-              item.uptime_24h_pct !== null && item.uptime_24h_pct !== undefined
-                ? jsx('span', { className: 'ia-badge ia-badge-neutral', children: `${pct(item.uptime_24h_pct)} 24h` })
-                : null,
-              item.latency_ms
-                ? jsx('span', { className: 'ia-badge ia-badge-neutral', children: `${Math.round(item.latency_ms)} ms` })
-                : null
-            ]
+            children: isRetired
+              ? [jsx('span', { className: 'ia-badge ia-badge-retired', children: 'Retired · not monitored' }, 'retired')]
+              : [
+                  jsx('span', {
+                    className: 'ia-badge',
+                    style: { borderColor: DRIFT_COLOR[drift], color: DRIFT_COLOR[drift] },
+                    children: DRIFT_LABEL[drift] || drift
+                  }, 'drift'),
+                  health !== 'unknown'
+                    ? jsx('span', {
+                        className: 'ia-badge',
+                        style: { borderColor: HEALTH_COLOR[health], color: HEALTH_COLOR[health] },
+                        children: health
+                      }, 'health')
+                    : null,
+                  item.uptime_24h_pct !== null && item.uptime_24h_pct !== undefined
+                    ? jsx('span', { className: 'ia-badge ia-badge-neutral', children: `${pct(item.uptime_24h_pct)} 24h` }, 'uptime')
+                    : null,
+                  item.latency_ms
+                    ? jsx('span', { className: 'ia-badge ia-badge-neutral', children: `${Math.round(item.latency_ms)} ms` }, 'lat')
+                    : null
+                ]
           }),
 
           // Single Contextual Action Bar
           jsxs('div', {
             className: 'ia-drawer-actions',
             children: [
-              needsAdoption
+              isRetired
+                ? jsx('button', {
+                    type: 'button',
+                    className: 'ia-btn ia-btn-primary ia-btn-full',
+                    disabled: Boolean(busy),
+                    onClick: () => doReconcile('adopt_live'),
+                    title: 'Set this entry back to status: active and re-adopt whatever the collectors see',
+                    children: '↻ Restore to active'
+                  })
+                : null,
+              !isRetired && needsAdoption
                 ? jsx('button', {
                     type: 'button',
                     className: 'ia-btn ia-btn-primary ia-btn-full',
@@ -1946,7 +1975,7 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                     children: drift === 'unregistered' ? '✓ Register in KB' : '✓ Adopt Live Drift'
                   })
                 : null,
-              isDown && item.recovery_cmd
+              !isRetired && isDown && item.recovery_cmd
                 ? jsx('button', {
                     type: 'button',
                     className: 'ia-btn ia-btn-primary ia-btn-full',
@@ -1959,7 +1988,7 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                     children: '↻ Run Playbook'
                   })
                 : null,
-              item.registry_path && guardrail !== 'off'
+              !isRetired && item.registry_path && guardrail !== 'off'
                 ? jsx('button', {
                     type: 'button',
                     className: cn('ia-btn ia-btn-ghost ia-btn-flex', isUnlocked && 'ia-btn-unlocked'),
@@ -2002,7 +2031,8 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                 blast,
                 busy,
                 doReconcile,
-                onSelectNode
+                onSelectNode,
+                isRetired
               })
             : null,
           tab === 'uptime'
@@ -2013,7 +2043,8 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                 busy,
                 setBusy,
                 onRefetch,
-                detail
+                detail,
+                isRetired
               })
             : null,
           tab === 'runbook'
@@ -2038,13 +2069,42 @@ function drawerTab(key, label, tab, setTab) {
   })
 }
 
-function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode }) {
+function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode, isRetired }) {
   const reasons = item.drift_reasons || []
   const upstream = (blast && blast.upstream) || []
   const downstream = (blast && blast.downstream) || []
+  // Only render properties that carry a real value: eight rows of em-dashes read
+  // as a broken panel, not as "this node has no address of its own".
+  const properties = [
+    ['Node ID', item.id],
+    ['LAN Address', addressOf(item)],
+    ['Tailnet IP', item.tailnet_ip],
+    ['VMID', item.vmid ? String(item.vmid) : ''],
+    ['Managed By', item.managed_by],
+    ['Systemd Unit', item.systemd_unit],
+    ['Registry Entry', item.registry_path || 'Unregistered'],
+    ['Last Seen Alive', item.last_seen_live_at ? ago(item.last_seen_live_at) : ''],
+    ['Auto-Heal Policy', item.auto_heal_policy && item.auto_heal_policy !== 'inherit' ? item.auto_heal_policy : ''],
+    ['Probe', item.probe]
+  ].filter(([, value]) => value !== null && value !== undefined && !['', '—', 'never'].includes(String(value).trim()))
 
   return jsxs(Fragment, {
     children: [
+      // 0. Retired entries have no telemetry to show — say so, don't render blanks.
+      isRetired
+        ? jsxs('div', {
+            className: 'ia-callout ia-callout-muted',
+            children: [
+              jsx('div', { className: 'ia-callout-title', children: 'Retired entry' }),
+              jsx('div', {
+                className: 'ia-callout-body',
+                children:
+                  'The registry marks this entry “removed”, so Infra Atlas does not probe it, page on it or count it in the live fleet. The runbook is kept as history — restore it to active if the node comes back.'
+              })
+            ]
+          })
+        : null,
+
       // 1. Operational Pitfalls Callout (surfaced prominently!)
       item.pitfalls_summary
         ? jsxs('div', {
@@ -2057,7 +2117,7 @@ function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode })
         : null,
 
       // 2. Drift Diff Card (only when drifted)
-      diff.length || (reasons.length && item.drift_status !== 'observed')
+      !isRetired && (diff.length || (reasons.length && item.drift_status !== 'observed'))
         ? jsxs('div', {
             className: 'ia-section',
             children: [
@@ -2101,19 +2161,12 @@ function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode })
         className: 'ia-section',
         children: [
           jsx('div', { className: 'ia-section-title', children: 'Node Properties' }),
-          jsxs('div', {
-            className: 'ia-prop-grid',
-            children: [
-              propCard('Node ID', item.id),
-              propCard('LAN Address', addressOf(item) || '—'),
-              propCard('Tailnet IP', item.tailnet_ip || '—'),
-              propCard('Managed By', item.managed_by || '—'),
-              propCard('Systemd Unit', item.systemd_unit || '—'),
-              propCard('Registry Entry', item.registry_path || 'Unregistered'),
-              propCard('Last Seen Alive', ago(item.last_seen_live_at)),
-              propCard('Auto-Heal Policy', item.auto_heal_policy || 'inherit')
-            ]
-          })
+          properties.length
+            ? jsx('div', {
+                className: 'ia-prop-grid',
+                children: properties.map(([label, value]) => propCard(label, value))
+              })
+            : jsx('div', { className: 'ia-muted', children: 'No live state recorded for this node.' })
         ]
       }),
 
@@ -2171,8 +2224,8 @@ function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode })
           })
         : null,
 
-      // 5. Subtle Retire Action at bottom if documented
-      item.registry_path && item.drift_status !== 'doc_only'
+      // 5. Subtle Retire Action at bottom if documented and still active
+      item.registry_path && !isRetired && item.drift_status !== 'doc_only'
         ? jsx('div', {
             className: 'ia-section-foot',
             children: jsx('button', {
@@ -2198,10 +2251,17 @@ function propCard(label, value) {
   })
 }
 
-function UptimeSection({ item, probes, incidents, busy, setBusy, onRefetch, detail }) {
+function UptimeSection({ item, probes, incidents, busy, setBusy, onRefetch, detail, isRetired }) {
   const history = probes || []
   const max = Math.max(1, ...history.map(sample => Number(sample.latency_ms) || 0))
   const probeUrl = (item.live_state && item.live_state.probe) || (item.doc_state && item.doc_state.probe) || item.probe || 'None configured'
+
+  if (isRetired) {
+    return jsx('div', {
+      className: 'ia-muted',
+      children: 'Retired entry — no probes, uptime or incidents are tracked. Restore it to active to start monitoring again.'
+    })
+  }
 
   const resolveIncident = incidentId =>
     runWithBusy(setBusy, `resolve:${incidentId}`, async () => {
@@ -2761,6 +2821,14 @@ const CSS = `
   border-color: rgba(239, 68, 68, 0.45);
   background: rgba(239, 68, 68, 0.12);
 }
+.ia-badge-retired {
+  color: var(--ui-text-tertiary, #94a3b8);
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.08);
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-weight: 500;
+}
 
 /* ── policy popover ──────────────────────────────────────────────────────── */
 .ia-pop-anchor { position: relative; }
@@ -2967,6 +3035,7 @@ const CSS = `
 .ia-legend-sub { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ui-text-quaternary, #64748b); }
 .ia-legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
 .ia-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ui-text-secondary, #94a3b8); white-space: nowrap; }
+.ia-legend-note { font-size: 10px; color: var(--ui-text-quaternary, #64748b); line-height: 1.35; padding-top: 2px; border-top: 1px solid rgba(148, 163, 184, 0.12); }
 
 /* ── slide-over node inspector drawer ────────────────────────────────────── */
 .ia-drawer {
@@ -3071,6 +3140,12 @@ const CSS = `
 }
 .ia-callout-title { font-size: 10.5px; font-weight: 600; color: #fcd34d; }
 .ia-callout-body { font-size: 11.5px; color: #fef3c7; line-height: 1.45; }
+.ia-callout-muted {
+  background: rgba(148, 163, 184, 0.07);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+.ia-callout-muted .ia-callout-title { color: var(--ui-text-secondary, #cbd5e1); }
+.ia-callout-muted .ia-callout-body { color: var(--ui-text-secondary, #94a3b8); }
 
 .ia-prop-grid {
   display: grid;
@@ -3231,6 +3306,9 @@ const CSS = `
 .ia-burst circle { fill: var(--ui-danger, #ef4444); opacity: 0; animation: ia-burst-fade 1.7s ease-out 3; }
 
 .ia-node { cursor: pointer; }
+.ia-node-retired .ia-lift { opacity: 0.45; }
+.ia-node-retired .ia-beacon { display: none; }
+.ia-node-retired:hover .ia-lift { opacity: 0.85; }
 .ia-lift { transition: transform 0.18s ease, filter 0.18s ease; }
 .ia-node:hover .ia-lift { transform: translateY(-2.5px); }
 .ia-node-active .ia-lift { transform: translateY(-5px); }

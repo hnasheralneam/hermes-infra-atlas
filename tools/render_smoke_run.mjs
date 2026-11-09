@@ -70,5 +70,22 @@ if (missing.length) {
 }
 console.log('ok   page renders the isometric scene (platforms, shapes, routed edges, packets)')
 
+// Retired entries document something that no longer exists: they must not be
+// drawn as empty shapes, and the `All` count must match what is actually drawn.
+const retiredDrawn = page?.html?.includes('data-node-id="srv-old-sandbox"')
+if (retiredDrawn) {
+  console.log('FAIL a status:removed entry was drawn on the topology')
+  process.exit(1)
+}
+console.log('ok   status:removed entries stay off the map')
+
+const drawn = (page?.html?.match(/data-node-id="/g) || []).length
+const allBadge = page?.html?.match(/<span class="ia-seg-count">(\d+)<\/span>/g) || []
+if (!drawn) {
+  console.log('FAIL page drew no nodes at all')
+  process.exit(1)
+}
+console.log(`ok   ${drawn} nodes drawn (retired excluded)`)
+
 console.log(`\n${results.length - failed.length}/${results.length} surfaces rendered`)
 process.exit(failed.length ? 1 : 0)

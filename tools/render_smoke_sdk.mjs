@@ -24,7 +24,8 @@ export const FIXTURE = {
       { id: 'proj-migration', kind: 'project', label: 'pve8-migration', stratum: 3, parent_id: 'vm-101-ops', drift_status: 'doc_only', health_status: 'unknown', project_path: '/srv/migration' },
       { id: 'agent-hermes', kind: 'agent', label: 'hermes', stratum: 4, drift_status: 'matched', health_status: 'up' },
       { id: 'cron-backups', kind: 'cron', label: 'nightly-backups', stratum: 4, parent_id: 'agent-hermes', drift_status: 'matched', health_status: 'up' },
-      { id: 'mdl-gpt-bridge', kind: 'model_endpoint', label: 'gpt-bridge', stratum: 4, drift_status: 'matched', health_status: 'up' }
+      { id: 'mdl-gpt-bridge', kind: 'model_endpoint', label: 'gpt-bridge', stratum: 4, drift_status: 'matched', health_status: 'up' },
+      { id: 'srv-old-sandbox', kind: 'server', label: 'retired-sandbox', stratum: 1, drift_status: 'doc_only', health_status: 'unknown', registry_path: 'servers/old-sandbox.md', doc_state: { status: 'removed' } }
     ],
     edges: [
       { source_id: 'srv-pve', target_id: 'vm-101-ops', relation: 'hosts' },
@@ -39,7 +40,7 @@ export const FIXTURE = {
       { source_id: 'svc-gateway', target_id: 'ct-redis', relation: 'depends_on' }
     ],
     incidents: [{ id: 7, node_id: 'svc-render', node_label: 'render-farm', status: 'open', trigger_error: 'connect refused 10.20.0.32:8081', opened_at: 1794000000, attempts: 1 }],
-    counts: { matched: 7, changed: 1, unregistered: 0, stale: 1, observed: 1, doc_only: 1, total: 11 },
+    counts: { matched: 7, changed: 1, unregistered: 0, stale: 1, observed: 1, doc_only: 2, total: 12 },
     fleet: { monitored_nodes: 11, down_nodes: 1, avg_uptime_24h_pct: 98.6 },
     last_sweep: { sweep_id: 'sw-1', finished_at: 1794000100, duration_ms: 900 },
     activity: [{ ts: 1794000000, session_id: 's1', tool_name: 'terminal', node_id: 'svc-render', action_kind: 'touch_blocked', blocked: 1, summary: 'ssh root@10.20.0.32' }],

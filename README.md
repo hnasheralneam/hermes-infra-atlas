@@ -189,6 +189,11 @@ The page around it stays deliberately sparse:
 - **Two corner docks**: a collapsible live-activity feed (reads / touches / blocked calls) and
   a combined zoom + legend control. `Esc` or a click on empty canvas closes the drawer and
   gives the whole viewport back to the map.
+- **Retired entries stay off the map.** An entry with `status: removed` is history, not
+  infrastructure: it is not drawn as an empty shape, not probed, and not counted in the
+  `All` badge (the legend says how many are hidden). Opening one anyway — a stale selection,
+  a `::infra{}` link — explains that it is retired and offers **Restore to active**, instead
+  of showing a panel full of empty fields.
 
 To see it live without the desktop app:
 
