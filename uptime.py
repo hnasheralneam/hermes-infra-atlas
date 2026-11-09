@@ -28,6 +28,16 @@ _VERIFY_WAIT = 2.0
 
 # -- eligibility ------------------------------------------------------------
 def incident_eligible(node: dict[str, Any]) -> bool:
+    """Whether a failing node may page someone.
+
+    Only what the registry documents pages: a discovered system unit with no entry
+    has no runbook, no owner and nothing to act on, and a failed oneshot (a refresh
+    timer with no network) is not an outage. Model endpoints are the one exception —
+    they are declared in config, not in the knowledge base.
+    """
+    documented = bool(str(node.get("registry_path") or "").strip())
+    if not documented and str(node.get("kind") or "") != "model_endpoint":
+        return False
     live = node.get("live_state") or {}
     if live.get("incident_eligible") is not None:
         return bool(live["incident_eligible"])
@@ -210,6 +220,15 @@ def evaluate(
         if health != "down":
             continue
         if not incident_eligible(node):
+            # Not something that can page (no registry entry, no runbook). If an
+            # incident was opened before this rule applied, close it now.
+            if active:
+                store.update_incident(
+                    active["id"],
+                    status="resolved",
+                    resolved_at=now,
+                    resolution_summary="Not an incident: the node has no registry entry to act on.",
+                )
             continue
 
         streak = store.bump_failure_streak(node_id)

@@ -547,6 +547,27 @@ class AtlasStore:
                 self._commit_with_retry()
             return len(doomed)
 
+    def close_incidents_for_missing_nodes(self, note: str = "node is no longer observed in the graph") -> list[int]:
+        """Resolve incidents whose node disappeared (pruned, renamed, or gone).
+
+        A unit that stops being reported — a failed oneshot that went inactive, a
+        container that was removed — otherwise leaves its incident open forever and
+        every watchdog tick repeats it.
+        """
+        with self._lock:
+            rows = self._run(
+                "SELECT i.id FROM incidents i LEFT JOIN nodes n ON n.id = i.node_id "
+                "WHERE i.status IN ('open', 'healing', 'escalated') AND n.id IS NULL"
+            ).fetchall()
+            ids = [int(row["id"]) for row in rows]
+            for incident_id in ids:
+                self._run(
+                    "UPDATE incidents SET status = 'resolved', resolved_at = ?, resolution_summary = ?, "
+                    "updated_at = ? WHERE id = ?",
+                    (_now(), note, _now(), incident_id),
+                )
+            return ids
+
     # -- edges ----------------------------------------------------------
     def replace_edges(self, edges: Iterable[dict[str, Any]]) -> None:
         now = _now()

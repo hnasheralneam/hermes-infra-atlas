@@ -369,6 +369,8 @@ def run_sweep(
         owners = _owner_families(requested)
         if owners:
             store.prune_live_nodes(owners, [node["id"] for node in persisted])
+            # A node that vanished takes its open incidents with it.
+            store.close_incidents_for_missing_nodes()
         store.replace_edges(_edges_for(nodes, doc_edges, live.edges))
         for observation in probe_result.nodes:
             store.insert_probe_sample(

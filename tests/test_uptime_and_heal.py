@@ -16,6 +16,8 @@ def _node(**kw):
         "live_state": {"incident_eligible": True, "probe_detail": "connection refused"},
         "recovery_cmd": None,
         "auto_heal_policy": "inherit",
+        # documented nodes are the ones allowed to page (see incident_eligible)
+        "registry_path": "services/test-service.md",
     }
     base.update(kw)
     return base
@@ -63,7 +65,16 @@ def test_not_eligible_nodes_never_open_an_incident(plugin_home):
 
 def test_down_parent_is_named_and_blocks_child_healing(plugin_home):
     store, uptime = _prepare(mode="auto", threshold=1)
-    store.upsert_node({"id": "lxc-1", "kind": "lxc", "label": "parent", "health_status": "down", "ports": []})
+    store.upsert_node(
+        {
+            "id": "lxc-1",
+            "kind": "lxc",
+            "label": "parent",
+            "health_status": "down",
+            "ports": [],
+            "registry_path": "servers/lxc-1.md",
+        }
+    )
     child = _node(id="svc-child", parent_id="lxc-1", recovery_cmd="systemctl --user restart child.service")
     store.upsert_node({**child, "health_status": "down"})
 
@@ -141,3 +152,29 @@ def test_remediation_brief_carries_the_runbook(plugin_home):
     assert "parent-host is up" in brief
     assert 'infra_query(node_id="svc-brief")' in brief
     assert "infra_incidents(action=\"resolve\"" in brief
+
+
+def test_an_undocumented_unit_never_pages(plugin_home):
+    """A discovered system unit with no entry has no runbook: drift, not an outage."""
+    store, uptime = _prepare(mode="auto", threshold=1)
+    discovered = _node(id="svc-fwupd-refresh", label="fwupd-refresh", registry_path=None)
+    store.upsert_node({**discovered, "health_status": "down"})
+
+    summary = uptime.evaluate(store, [discovered], sweep_id=1, trigger_auto_heal=True)
+    assert summary["opened"] == []
+    assert store.active_incident_for("svc-fwupd-refresh") is None
+
+
+def test_an_incident_closes_when_its_node_disappears(plugin_home):
+    store, uptime = _prepare(mode="notify_only", threshold=1)
+    node = _node(id="svc-vanish")
+    store.upsert_node({**node, "health_status": "down"})
+    uptime.evaluate(store, [node], sweep_id=1, trigger_auto_heal=False)
+    incident = store.active_incident_for("svc-vanish")
+    assert incident is not None
+
+    store._run("DELETE FROM nodes WHERE id = ?", ("svc-vanish",))
+    closed = store.close_incidents_for_missing_nodes()
+
+    assert closed == [incident["id"]]
+    assert store.get_incident(incident["id"])["status"] == "resolved"
