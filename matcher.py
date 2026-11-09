@@ -134,6 +134,27 @@ def refresh() -> None:
 
 
 def match_text(store, text: str) -> list[dict[str, Any]]:
+    """Nodes a free-form string references (see ``_match_scored``)."""
+    return [node for node, _score in _match_scored(store, text)]
+
+
+def required_nodes(store, text: str) -> list[dict[str, Any]]:
+    """Entries a touch must have read first: the most specific matches only.
+
+    ``curl host:8090`` names the service on that port, so reading that entry is
+    enough — demanding the host's entry too turned every service-level command
+    into a two-entry read. A bare address (no port, no name) keeps every claimant.
+    """
+    scored = _match_scored(store, text)
+    if not scored:
+        return []
+    best = max(score for _node, score in scored)
+    if best >= 2:
+        return [node for node, score in scored if score == best]
+    return [node for node, _score in scored]
+
+
+def _match_scored(store, text: str) -> list[tuple[dict[str, Any], int]]:
     """Nodes a free-form string (command, path, prompt) actually references.
 
     Specificity beats breadth: ``curl 10.0.0.212:4000`` names the service on that
@@ -166,7 +187,7 @@ def match_text(store, text: str) -> list[dict[str, Any]]:
         for match in _VMID_CMD_RE.finditer(haystack):
             node_id = cache.get("vmid", {}).get(int(match.group(1)))
             if node_id in cache["nodes"]:
-                return [cache["nodes"][node_id]]
+                return [(cache["nodes"][node_id], 4)]
         return []
 
     def score(node_id: str) -> int:
@@ -202,7 +223,7 @@ def match_text(store, text: str) -> list[dict[str, Any]]:
                 candidates = ids
             else:
                 return []
-    return [cache["nodes"][node_id] for node_id in candidates if node_id in cache["nodes"]]
+    return [(cache["nodes"][node_id], scores[node_id]) for node_id in candidates if node_id in cache["nodes"]]
 
 
 def nodes_for_registry_path(store, path: str) -> list[dict[str, Any]]:
@@ -271,7 +292,7 @@ def classify(store, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
             read_only = any(marker in command for marker in READ_COMMANDS) and "systemctl restart" not in command
             nodes = match_text(store, command)
             return {"role": "read" if (read_only and nodes) else "none", "nodes": nodes}
-        nodes = match_text(store, command)
+        nodes = required_nodes(store, command)
         return {"role": "touch", "nodes": nodes} if nodes else {"role": "none", "nodes": []}
 
     return {"role": "none", "nodes": []}

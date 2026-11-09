@@ -263,3 +263,30 @@ def test_address_and_port_names_the_service_on_a_shared_host(plugin_home, regist
     assert found == ["svc-relay"], found
     # the bare address stays ambiguous: two nodes share it
     assert matcher.match_text(store, "ssh root@10.0.0.143 uptime") == [] or True
+
+
+def test_a_service_port_touch_only_needs_that_service_read(plugin_home, registry):
+    """curl host:port names one service; the host's entry is not also demanded."""
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    hooks = H.submodule("hooks")
+    tools = H.submodule("atlas_tools")
+    matcher = H.submodule("matcher")
+
+    store.upsert_node({"id": "srv-host", "kind": "server", "label": "host", "host_ip": "10.0.0.143", "registry_path": "servers/host.md"})
+    store.upsert_node(
+        {"id": "svc-app", "kind": "service", "label": "app", "host_ip": "10.0.0.143", "ports": ["8090"],
+         "registry_path": "services/app.md"}
+    )
+    matcher.refresh()
+
+    command = {"command": "curl -s -m2 http://10.0.0.143:8090/x"}
+    assert [n["id"] for n in matcher.required_nodes(store, command["command"])] == ["svc-app"]
+    assert hooks.on_pre_tool_call(tool_name="terminal", args=command, session_id="s-p1")["action"] == "block"
+
+    tools.infra_query({"node_id": "svc-app"}, session_id="s-p1")
+    assert hooks.on_pre_tool_call(tool_name="terminal", args=command, session_id="s-p1") is None
+
+    # A bare address still demands the host it names.
+    assert [n["id"] for n in matcher.required_nodes(store, "ssh root@10.0.0.143 uptime")] == ["srv-host"]
