@@ -113,7 +113,7 @@ function useNode(nodeId) {
 
 // Bumped whenever the bundle changes, so a reload can be verified from the page:
 //   document.querySelector('.ia-root').dataset.build
-const BUILD = 'f15e782'
+const BUILD = '20261110-1552'
 
 const ISO = { tileW: 64, tileH: 32, stepZ: 13, slab: 10, pitch: 2, pad: 30 }
 const ISO_HW = ISO.tileW / 2

@@ -182,6 +182,10 @@ tests/               pytest suite (registry, fusion, gate, uptime, collectors, A
 ## Tests
 
 ```bash
+After a reload, the page tells you which bundle it is running:
+`document.querySelector('.ia-root').dataset.build` in the desktop devtools. It is bumped on
+every shipped change.
+
 tools/check.sh                       # every gate: compile, syntax, 8 surfaces, gestures,
                                      # layout, manifest validation, pytest, coverage floor
 PYTHONPATH=<hermes-agent checkout> python -m pytest
