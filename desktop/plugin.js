@@ -208,8 +208,7 @@ function planScene(nodes) {
   const strata = Array.from(byStratum.keys()).sort((a, b) => a - b)
 
   const placed = new Map()
-  const platforms = []
-  let cursorY = 0
+  const specs = []
   strata.forEach((stratum, t) => {
     const members = byStratum.get(stratum)
     const groups = new Map()
@@ -230,26 +229,82 @@ function planScene(nodes) {
     loose.sort(byLabel)
     ordered.push(...loose)
 
-    const rows = ordered.length > 6 ? 2 : 1
-    const cols = Math.max(1, Math.ceil(ordered.length / rows))
-    platforms.push({
-      t,
-      stratum,
-      cols,
-      rows,
-      P: 0,
-      D: rows * ISO.pitch + 2,
-      z: strata.length - 1 - t,
-      ordered
-    })
+    specs.push({ t, stratum, ordered, z: strata.length - 1 - t })
   })
 
-  const sharedW = Math.max(...platforms.map(p => p.cols * ISO.pitch + 4))
+  // Terrace shape: a single row makes a 30-tile ribbon, one tile deep. Packing a
+  // tier up to three rows deep trades width for depth and keeps the diorama
+  // roughly 1.4:1 instead of a letterbox. Every combination is cheap (at most
+  // 3^4), so pick the one whose projected footprint is closest to that.
+  const buildPlatforms = rowsList => {
+    const sized = specs.map((spec, index) => {
+      const wanted = rowsList[index] || 1
+      const rows = Math.max(1, Math.min(3, Math.min(spec.ordered.length, wanted)))
+      const cols = Math.max(1, Math.ceil(spec.ordered.length / rows))
+      return { ...spec, rows, cols, D: rows * ISO.pitch + 2 }
+    })
+    const W = Math.max(...sized.map(spec => spec.cols * ISO.pitch + 4))
+    let cursorY = 0
+    return sized.map(spec => {
+      const platform = { t: spec.t, stratum: spec.stratum, cols: spec.cols, rows: spec.rows, L: 0, P: cursorY, W, D: spec.D, z: spec.z, nodes: spec.ordered }
+      cursorY += spec.D + 1
+      return platform
+    })
+  }
+
+  const measure = list => {
+    let lo = Infinity
+    let hi = -Infinity
+    let top = Infinity
+    let bottom = -Infinity
+    const cliff = 16 + ISO.stepZ
+    list.forEach(item => {
+      const corners = [
+        [projX(item.L, item.P), projY(item.L, item.P, item.z)],
+        [projX(item.L + item.W, item.P), projY(item.L + item.W, item.P, item.z)],
+        [projX(item.L + item.W, item.P + item.D), projY(item.L + item.W, item.P + item.D, item.z)],
+        [projX(item.L, item.P + item.D), projY(item.L, item.P + item.D, item.z)]
+      ]
+      corners.forEach(([cx, cy]) => {
+        lo = Math.min(lo, cx)
+        hi = Math.max(hi, cx)
+        top = Math.min(top, cy)
+        bottom = Math.max(bottom, cy + cliff)
+      })
+    })
+    return { width: hi - lo, height: Math.max(1, bottom - top) }
+  }
+
+  const TARGET_ASPECT = 1.4
+  const combos = specs.reduce(
+    (acc, spec) => {
+      const next = []
+      acc.forEach(prefix => {
+        const cap = Math.min(3, Math.max(1, spec.ordered.length))
+        for (let rows = 1; rows <= cap; rows++) next.push([...prefix, rows])
+      })
+      return next
+    },
+    [[]]
+  )
+  // Aspect first, area second: an isometric terrace is inherently 2:1, so on a
+  // scene where every packing scores the same shape the winner should be the
+  // most compact one (fewest empty tiles, least zoom-out), not the first tried.
+  const scored = combos.map(rowsList => {
+    const candidate = buildPlatforms(rowsList)
+    const size = measure(candidate)
+    return {
+      platforms: candidate,
+      aspectErr: Math.abs(Math.log(size.width / size.height / TARGET_ASPECT)),
+      area: size.width * size.height
+    }
+  })
+  const closest = Math.min(...scored.map(item => item.aspectErr))
+  const platforms = scored
+    .filter(item => item.aspectErr <= closest + 0.02)
+    .sort((a, b) => a.area - b.area)[0].platforms
   platforms.forEach(p => {
-    p.W = sharedW
-    p.P = cursorY
-    p.L = 0
-    p.ordered.forEach((node, index) => {
+    p.nodes.forEach((node, index) => {
       placed.set(node.id, {
         node,
         gx: p.L + 2 + ISO.pitch * (index % p.cols),
@@ -259,8 +314,7 @@ function planScene(nodes) {
         z: p.z
       })
     })
-    cursorY = p.P + p.D + 1
-    delete p.ordered
+    delete p.nodes
   })
 
   const shiftX = -Math.min(...platforms.map(p => p.L))
@@ -952,6 +1006,9 @@ const PlatformView = React.memo(function PlatformView({ platform, next }) {
   for (let gy = p.P + 1; gy < p.P + p.D; gy++) grid += `M ${r2(projX(p.L, gy))} ${r2(projY(p.L, gy, z))} L ${r2(projX(p.L + p.W, gy))} ${r2(projY(p.L + p.W, gy, z))} `
   return jsxs('g', {
     className: cn('ia-plat', `ia-plat-${p.t % 4}`),
+    'data-plat-stratum': p.stratum,
+    'data-plat-cols': p.cols,
+    'data-plat-rows': p.rows,
     style: { '--t': p.t, animationDelay: `${p.t * 110}ms` },
     children: [
       riser ? jsx('path', { d: riser, className: 'ia-plat-riser' }) : null,
@@ -3806,3 +3863,6 @@ export default {
     ])
   }
 }
+
+// Exposed for tools/viewport_test_run.mjs; the Desktop only consumes the default.
+export { planScene }

@@ -76,7 +76,15 @@ pitfalls: "Dial 10.0.0.212:4000 directly; the old front was removed."
 ```
 
 `infra_upsert` merges frontmatter and never truncates the prose below it; it also updates
-`INDEX.md` and prepends a `change-log.md` entry. `pitfalls` is surfaced in the guardrail
+`INDEX.md` and prepends a `change-log.md` entry.
+
+`kind` decides which terrace a node lands on, so an entry that sits in `servers/` but is
+really a guest is corrected at parse time: **anything with a `vmid` — or a Proxmox guest with
+a `parent_id` — is drawn as a VM on COMPUTE, not as metal on HARDWARE.** A hypervisor has no
+vmid, so the test is safe both ways, and you never have to file entries in a different folder
+to get the picture right.
+
+`pitfalls` is surfaced in the guardrail
 block message and in the outage brief, so the operator's hard-won rules reach the agent at
 the moment they matter.
 
@@ -173,11 +181,16 @@ pan/zoom — still selectable, keyboard-reachable and crisp at any zoom):
   cost): parallel connections fan into side-by-side lanes, terrace steps are
   crossed squarely, and each relation has its own color, dash rhythm and a
   travelling packet dot.
-- Micro-animations everywhere (entrance drop-in, LEDs, slosh, scanline, bob,
-  orbit, flow), all phase-shifted per node and disabled under
-  `prefers-reduced-motion`. Guardrail pulses keep their semantics: blocked
+- Micro-animations (entrance drop-in, LEDs, slosh, scanline, bob, orbit, flow),
+  phase-shifted per node, suppressed on large fleets (see *Decoration is data*)
+  and disabled under `prefers-reduced-motion`. Guardrail pulses keep their
+  semantics: blocked
   calls shake the node with red ripples and scatter red packets along its
   edges; reads and allowed touches flash cyan/green.
+- Terraces pack **up to three rows deep** and the depth is chosen per tier: every row
+  combination (at most 3⁴) is measured and the one closest to a 1.4:1 footprint wins, with
+  the most compact packing breaking ties. A forty-service tier becomes 14×3 instead of a
+  40-tile ribbon, so a big fleet reads as a block rather than a letterbox.
 
 The page around it stays deliberately sparse:
 

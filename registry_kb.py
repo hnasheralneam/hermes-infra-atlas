@@ -378,12 +378,18 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
         mtime, digest = None, None
 
     resolved_kind = str(meta.get("kind") or kind)
+    # A vmid is the one thing a guest has and a hypervisor does not. Entries filed
+    # under servers/ that carry one (or that are a Proxmox guest with a parent
+    # host) are VMs: drawing them on the HARDWARE terrace claims they are metal.
+    parent_id = str(meta.get("parent_id") or "").strip() or None
+    if resolved_kind == "server" and (vmid or (parent_id and str(managed).lower() == "proxmox")):
+        resolved_kind = "vm"
     node = {
         "id": node_id,
         "kind": resolved_kind,
         "stratum": int(meta.get("stratum") or KIND_STRATUM.get(resolved_kind, 3)),
         "label": label,
-        "parent_id": str(meta.get("parent_id") or "").strip() or None,
+        "parent_id": parent_id,
         "host_ip": str(ip_match).strip() if ip_match else None,
         "tailnet_ip": str(tailnet_match).strip() if tailnet_match else None,
         "vmid": vmid,

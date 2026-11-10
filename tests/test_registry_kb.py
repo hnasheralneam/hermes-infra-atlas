@@ -32,6 +32,57 @@ def test_legacy_entry_is_parsed_without_frontmatter(plugin_home, legacy_registry
     assert by_id["svc-gone"]["doc_status"] == "removed"
 
 
+def test_server_entry_with_a_vmid_is_parsed_as_a_vm(plugin_home, registry):
+    """A vmid is the one thing a guest has and a hypervisor does not."""
+    H.load_plugin()
+    kb = H.submodule("registry_kb")
+    (registry / "servers" / "guest.md").write_text(
+        "---\n"
+        "id: srv-guest\n"
+        "kind: server\n"
+        "label: guest (VM 207)\n"
+        "parent_id: srv-host\n"
+        "host_ip: 10.0.0.40\n"
+        "vmid: 207\n"
+        "managed_by: proxmox\n"
+        "status: active\n"
+        "---\n\nGuest box.\n",
+        encoding="utf-8",
+    )
+    (registry / "servers" / "metal.md").write_text(
+        "---\n"
+        "id: srv-metal\n"
+        "kind: server\n"
+        "label: metal host\n"
+        "host_ip: 10.0.0.41\n"
+        "managed_by: proxmox\n"
+        "status: active\n"
+        "---\n\nHypervisor.\n",
+        encoding="utf-8",
+    )
+    (registry / "servers" / "guest-by-parent.md").write_text(
+        "---\n"
+        "id: srv-guest-2\n"
+        "kind: server\n"
+        "label: guest without vmid\n"
+        "parent_id: srv-metal\n"
+        "host_ip: 10.0.0.42\n"
+        "managed_by: proxmox\n"
+        "status: active\n"
+        "---\n\nGuest on the hypervisor.\n",
+        encoding="utf-8",
+    )
+    nodes, _ = kb.parse_registry(registry)
+    by_id = {node["id"]: node for node in nodes}
+
+    assert by_id["srv-guest"]["kind"] == "vm"
+    assert by_id["srv-guest"]["stratum"] == 2
+    assert by_id["srv-guest-2"]["kind"] == "vm"
+    # a bare hypervisor stays hardware
+    assert by_id["srv-metal"]["kind"] == "server"
+    assert by_id["srv-metal"]["stratum"] == 1
+
+
 def test_removed_in_prose_does_not_retire_a_live_service(plugin_home, registry):
     H.load_plugin()
     kb = H.submodule("registry_kb")

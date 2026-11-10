@@ -29,7 +29,9 @@ window.Element.prototype.getBoundingClientRect = function getBoundingClientRect(
 
 const React = await import('react')
 const { createRoot } = await import('react-dom/client')
-const plugin = (await import('./plugin.mjs')).default
+const module = await import('./plugin.mjs')
+const plugin = module.default
+const { planScene } = module
 
 const surfaces = []
 plugin.register({
@@ -159,6 +161,37 @@ const preDouble = box()
 await fire(svg, new window.MouseEvent('dblclick', { clientX: 500, clientY: 300, bubbles: true, cancelable: true }))
 const postDouble = box()
 check('double-click zooms in', postDouble.w < preDouble.w - 1, `${preDouble.w.toFixed(1)} → ${postDouble.w.toFixed(1)}`)
+
+// ── terrace packing ────────────────────────────────────────────────────────
+const makeNodes = (count, stratum) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `svc-node-${String(index).padStart(2, '0')}`,
+    kind: 'service',
+    stratum,
+    label: `node ${index}`,
+    drift_status: 'matched',
+    health_status: 'up'
+  }))
+
+const big = planScene(makeNodes(40, 3))
+const bigPlat = big.platforms[0]
+check('a large tier stacks three rows deep', bigPlat.rows === 3, `rows ${bigPlat.rows}, cols ${bigPlat.cols}`)
+check('a large tier fits every node in its grid', bigPlat.cols * bigPlat.rows >= 40, `${bigPlat.cols}x${bigPlat.rows}`)
+check('every node is placed exactly once', big.placed.size === 40, `${big.placed.size} placed`)
+
+const cells = new Set()
+big.placed.forEach(info => cells.add(`${info.gx},${info.gy}`))
+check('no two nodes share a tile', cells.size === 40, `${cells.size} distinct tiles`)
+
+const small = planScene(makeNodes(5, 3))
+check('a small tier stays shallow', small.platforms[0].rows <= 2, `rows ${small.platforms[0].rows}`)
+
+const rowsOf = plan => plan.platforms.map(platform => platform.rows).join('/')
+check(
+  'stacking is capped at three',
+  planScene(makeNodes(60, 3)).platforms.every(platform => platform.rows <= 3),
+  rowsOf(planScene(makeNodes(60, 3)))
+)
 
 // ── lean mode ──────────────────────────────────────────────────────────────
 const animated = window.document.querySelectorAll('animateMotion').length
