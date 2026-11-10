@@ -854,7 +854,7 @@ const pulseColor = kind =>
         ? 'var(--ui-warning, #f59e0b)'
         : 'var(--ui-info, #06b6d4)'
 
-const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddress, onSelect }) {
+const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, delay, showTitle, showAddress, animated, onSelect }) {
   const scene = kindScene(node.kind)
   const drift = node.drift_status || 'matched'
   const driftColor = DRIFT_COLOR[drift] || DRIFT_COLOR.matched
@@ -866,7 +866,16 @@ const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, 
   const top = scene.top
   const retired = String((node.doc_state && node.doc_state.status) || node.doc_status || '') === 'removed'
   return jsxs('g', {
-    className: cn('ia-node', `ia-kind-${node.kind}`, retired && 'ia-node-retired', active && 'ia-node-active', !showTitle && 'ia-node-compact', pulse && `ia-pulse-${pulse}`, fresh && 'ia-enter'),
+    className: cn(
+      'ia-node',
+      `ia-kind-${node.kind}`,
+      retired && 'ia-node-retired',
+      active && 'ia-node-active',
+      !showTitle && 'ia-node-compact',
+      pulse && `ia-pulse-${pulse}`,
+      fresh && animated && 'ia-enter',
+      !animated && 'ia-still'
+    ),
     transform: `translate(${r2(projX(info.gx + 0.5, info.gy + 0.5))} ${r2(projY(info.gx + 0.5, info.gy + 0.5, info.z || 0))})`,
     'data-node-id': node.id,
     onClick: event => {
@@ -970,13 +979,12 @@ const PlatformLabel = React.memo(function PlatformLabel({ platform }) {
   })
 })
 
-const EdgeView = React.memo(function EdgeView({ route, selectedId, pulseFor, labelHint }) {
+const EdgeView = React.memo(function EdgeView({ route, selectedId, burst, labelHint, animated }) {
   const { edge, style } = route
   const hot = Boolean(selectedId) && (edge.source_id === selectedId || edge.target_id === selectedId)
   const dim = Boolean(selectedId) && !hot
-  const burst = pulseFor && (pulseFor(edge.source_id) === 'touch_blocked' || pulseFor(edge.target_id) === 'touch_blocked')
   return jsxs('g', {
-    className: cn('ia-edge', `ia-edge-${edge.relation}`, hot && 'ia-edge-hot', dim && 'ia-edge-dim'),
+    className: cn('ia-edge', `ia-edge-${edge.relation}`, hot && 'ia-edge-hot', dim && 'ia-edge-dim', !animated && 'ia-edge-still'),
     style: { '--edge-c': style.color, '--ew': style.width, '--flow-dur': `${style.flow}s` },
     children: [
       jsx('path', { d: route.d, className: 'ia-edge-line', strokeDasharray: style.dash || undefined }),
@@ -985,11 +993,13 @@ const EdgeView = React.memo(function EdgeView({ route, selectedId, pulseFor, lab
         transform: `translate(${r2(route.chevron.x)} ${r2(route.chevron.y)}) rotate(${r2(route.angle)})`,
         className: 'ia-edge-head'
       }),
-      jsxs('g', { className: 'ia-packet', children: [
-        jsx('circle', { r: route.length > 430 ? 2.5 : 2, className: 'ia-packet-core' }),
-        jsx('circle', { r: 4.8, className: 'ia-packet-halo' }),
-        jsx('animateMotion', { path: route.d, dur: `${route.dur}s`, begin: `${(-route.phase * route.dur).toFixed(2)}s`, repeatCount: 'indefinite', calcMode: 'linear' })
-      ] }),
+      animated
+        ? jsxs('g', { className: 'ia-packet', children: [
+            jsx('circle', { r: route.length > 430 ? 2.5 : 2, className: 'ia-packet-core' }),
+            jsx('circle', { r: 4.8, className: 'ia-packet-halo' }),
+            jsx('animateMotion', { path: route.d, dur: `${route.dur}s`, begin: `${(-route.phase * route.dur).toFixed(2)}s`, repeatCount: 'indefinite', calcMode: 'linear' })
+          ] })
+        : null,
       burst
         ? [0, 1, 2].map(i =>
             jsxs('g', { className: 'ia-burst', style: { animationDelay: `${i * 0.24}s` }, children: [
@@ -1002,38 +1012,241 @@ const EdgeView = React.memo(function EdgeView({ route, selectedId, pulseFor, lab
   })
 })
 
-function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom, offset, setOffset }) {
+// ── viewport ───────────────────────────────────────────────────────────────
+// Pan and zoom are handled imperatively: the SVG viewBox attribute is written
+// directly inside a rAF, and React state is only synced once the gesture ends.
+// Routing a pointermove through setState re-rendered every node, edge and
+// platform on each frame, which is what made dragging feel like mud.
+const MIN_ZOOM = 0.42
+const MAX_ZOOM = 3
+
+function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom, offset, setOffset, api, onInteract }) {
   const plan = React.useMemo(() => planScene(nodes), [nodes])
   const routed = React.useMemo(() => routeEdges(edges, plan), [edges, plan])
+  const svgRef = React.useRef(null)
   const dragRef = React.useRef(null)
   const seenRef = React.useRef(null)
+  const viewRef = React.useRef({ x: offset.x, y: offset.y, z: zoom })
+  const frameRef = React.useRef(0)
+  const commitRef = React.useRef(0)
 
-  const viewBox = `${-offset.x} ${-offset.y} ${plan.width / zoom} ${plan.height / zoom}`
+  // CSS px per world unit for the current viewBox: the SVG satisfies
+  // `preserveAspectRatio` by letterboxing, so the shorter side rules.
+  const scaleFor = (rect, z) => {
+    if (!rect || !rect.width || !rect.height) return 1
+    return Math.max(0.0001, Math.min(rect.width / (plan.width / z), rect.height / (plan.height / z)))
+  }
+
+  const paint = React.useCallback(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    if (frameRef.current) cancelAnimationFrame(frameRef.current)
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = 0
+      const v = viewRef.current
+      svg.setAttribute('viewBox', `${r2(-v.x)} ${r2(-v.y)} ${r2(plan.width / v.z)} ${r2(plan.height / v.z)}`)
+    })
+  }, [plan.width, plan.height])
+
+  const commit = React.useCallback(
+    immediate => {
+      if (commitRef.current) clearTimeout(commitRef.current)
+      const flush = () => {
+        commitRef.current = 0
+        const v = viewRef.current
+        setOffset(prev => (Math.abs(prev.x - v.x) < 0.5 && Math.abs(prev.y - v.y) < 0.5 ? prev : { x: v.x, y: v.y }))
+        setZoom(prev => (Math.abs(prev - v.z) < 0.001 ? prev : v.z))
+      }
+      if (immediate) flush()
+      else commitRef.current = setTimeout(flush, 240)
+    },
+    [setOffset, setZoom]
+  )
+
+  const touched = React.useCallback(() => {
+    if (onInteract) onInteract()
+  }, [onInteract])
+
+  // Keep the world point under (px, py) pinned while the zoom changes.
+  const zoomAround = React.useCallback(
+    (z, rect, px, py) => {
+      const v = viewRef.current
+      const z2 = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z))
+      if (Math.abs(z2 - v.z) < 1e-4) return false
+      const k0 = scaleFor(rect, v.z)
+      const k1 = scaleFor(rect, z2)
+      const w0 = plan.width / v.z
+      const h0 = plan.height / v.z
+      const w1 = plan.width / z2
+      const h1 = plan.height / z2
+      const ox0 = (rect.width - w0 * k0) / 2
+      const oy0 = (rect.height - h0 * k0) / 2
+      const wx = -v.x + (px - ox0) / k0
+      const wy = -v.y + (py - oy0) / k0
+      const ox1 = (rect.width - w1 * k1) / 2
+      const oy1 = (rect.height - h1 * k1) / 2
+      v.z = z2
+      v.x = -wx + (px - ox1) / k1
+      v.y = -wy + (py - oy1) / k1
+      paint()
+      return true
+    },
+    [paint, plan.width, plan.height]
+  )
+
+  const zoomBy = React.useCallback(
+    factor => {
+      const svg = svgRef.current
+      if (!svg) return
+      const rect = svg.getBoundingClientRect()
+      if (zoomAround(viewRef.current.z * factor, rect, rect.width / 2, rect.height / 2)) {
+        commit(true)
+        touched()
+      }
+    },
+    [commit, touched, zoomAround]
+  )
+
+  const reset = React.useCallback(() => {
+    viewRef.current = { x: 0, y: 0, z: 1 }
+    paint()
+    commit(true)
+  }, [commit, paint])
+
+  const fit = React.useCallback(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const gap = 60
+    const z = Math.max(
+      MIN_ZOOM,
+      Math.min(1.6, Math.min((rect.width - gap) / plan.width, (rect.height - gap) / plan.height) * 1.0)
+    )
+    viewRef.current = { x: 0, y: 0, z }
+    paint()
+    commit(true)
+  }, [commit, paint, plan.width, plan.height])
+
+  React.useEffect(() => {
+    if (api) api.current = { zoomBy, reset, fit }
+    return () => {
+      if (api) api.current = null
+    }
+  }, [api, zoomBy, reset, fit])
+
+  // Adopt viewport changes that came from outside (buttons, reset, remount).
+  React.useEffect(() => {
+    const v = viewRef.current
+    if (Math.abs(v.z - zoom) > 1e-3 || Math.abs(v.x - offset.x) > 0.5 || Math.abs(v.y - offset.y) > 0.5) {
+      viewRef.current = { x: offset.x, y: offset.y, z: zoom }
+      paint()
+    }
+  }, [zoom, offset, paint])
+
+  React.useEffect(() => {
+    paint()
+    return () => {
+      if (frameRef.current) cancelAnimationFrame(frameRef.current)
+      if (commitRef.current) clearTimeout(commitRef.current)
+    }
+  }, [paint])
+
+  // Wheel and trackpad must reach us non-passively so we can stop the page from
+  // scrolling underneath the map. React attaches onWheel passively.
+  React.useEffect(() => {
+    const svg = svgRef.current
+    if (!svg || !svg.addEventListener) return undefined
+    const onWheel = event => {
+      const v = viewRef.current
+      const rect = svg.getBoundingClientRect()
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1
+      const dy = event.deltaY * unit
+      const dx = event.deltaX * unit
+      const pinch = event.ctrlKey || event.metaKey
+      const horizontal = !pinch && !event.shiftKey && Math.abs(dx) > 0 && Math.abs(dx) >= Math.abs(dy)
+      if (horizontal) {
+        event.preventDefault()
+        v.x += dx * scaleFor(rect, v.z)
+        paint()
+        commit()
+        touched()
+        return
+      }
+      event.preventDefault()
+      const k = scaleFor(rect, v.z)
+      const px = event.clientX - rect.left
+      const py = event.clientY - rect.top
+      if (event.shiftKey && !pinch) {
+        v.y += dy * k
+        paint()
+        commit()
+        touched()
+        return
+      }
+      // Exponential so a mouse notch and a trackpad pinch both feel linear.
+      if (zoomAround(v.z * Math.exp(-dy * 0.0022), rect, px, py)) {
+        commit()
+        touched()
+      }
+    }
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    return () => svg.removeEventListener('wheel', onWheel)
+  }, [commit, paint, touched, zoomAround])
 
   const onPointerDown = event => {
+    if (event.button !== undefined && event.button > 0) return
     if (event.target && event.target.closest && event.target.closest('[data-node-id]')) return
-    dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y, moved: false }
-    event.currentTarget.setPointerCapture?.(event.pointerId)
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    dragRef.current = {
+      px: event.clientX,
+      py: event.clientY,
+      x: viewRef.current.x,
+      y: viewRef.current.y,
+      k: scaleFor(rect, viewRef.current.z),
+      moved: false
+    }
+    svg.setPointerCapture?.(event.pointerId)
+    if (svg.classList) svg.classList.add('ia-svg-dragging')
   }
+
   const onPointerMove = event => {
-    if (!dragRef.current) return
-    const rawDx = event.clientX - dragRef.current.x
-    const rawDy = event.clientY - dragRef.current.y
-    if (Math.hypot(rawDx, rawDy) > 4) dragRef.current.moved = true
-    const dx = rawDx / zoom
-    const dy = rawDy / zoom
-    setOffset({ x: dragRef.current.ox - dx, y: dragRef.current.oy - dy })
+    const drag = dragRef.current
+    if (!drag) return
+    const dx = event.clientX - drag.px
+    const dy = event.clientY - drag.py
+    if (!drag.moved && Math.hypot(dx, dy) < 3) return
+    drag.moved = true
+    // Content follows the cursor: dragging right moves the world right.
+    viewRef.current.x = drag.x + dx * drag.k
+    viewRef.current.y = drag.y + dy * drag.k
+    paint()
   }
-  const onPointerUp = () => {
-    if (dragRef.current && !dragRef.current.moved && selectedId) {
+
+  const endDrag = () => {
+    const drag = dragRef.current
+    const svg = svgRef.current
+    if (svg && svg.classList) svg.classList.remove('ia-svg-dragging')
+    dragRef.current = null
+    if (!drag) return
+    if (drag.moved) {
+      commit(true)
+      touched()
+    } else if (selectedId && onSelect) {
       onSelect(null)
     }
-    dragRef.current = null
   }
-  const onWheel = event => {
-    if (event.ctrlKey || event.metaKey || Math.abs(event.deltaY) > 0) {
-      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
-      setZoom(z => Math.min(2.6, Math.max(0.42, z * factor)))
+
+  const onDoubleClick = event => {
+    if (event.target && event.target.closest && event.target.closest('[data-node-id]')) return
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const factor = event.shiftKey ? 1 / 1.7 : 1.7
+    if (zoomAround(viewRef.current.z * factor, rect, event.clientX - rect.left, event.clientY - rect.top)) {
+      commit(true)
+      touched()
     }
   }
 
@@ -1052,6 +1265,18 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
     (node.drift_status && node.drift_status !== 'matched' && node.drift_status !== 'observed' && node.drift_status !== 'doc_only') ||
     node.health_status === 'down' ||
     node.health_status === 'degraded'
+
+  // A big fleet does not need every LED, scan line and packet running forever:
+  // keep the decoration where it carries information and leave the rest static.
+  const reducedMotion = React.useMemo(() => {
+    try {
+      return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    } catch (error) {
+      return false
+    }
+  }, [])
+  const lean = reducedMotion || nodes.length > 44
+
   const dense = nodes.length > 26 && zoom < 1.18
   const primaryKind = node => ['server', 'vm', 'lxc', 'agent', 'model_endpoint'].includes(node.kind)
   const showTitleFor = node =>
@@ -1068,12 +1293,16 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
     className: 'ia-graph-wrap',
     children: jsxs('svg', {
       className: 'ia-svg',
-      viewBox,
+      ref: svgRef,
+      viewBox: `${r2(-offset.x)} ${r2(-offset.y)} ${r2(plan.width / zoom)} ${r2(plan.height / zoom)}`,
+      preserveAspectRatio: 'xMidYMid meet',
       onPointerDown,
       onPointerMove,
-      onPointerUp,
-      onPointerLeave: () => { dragRef.current = null },
-      onWheel,
+      onPointerUp: endDrag,
+      onPointerCancel: endDrag,
+      onPointerLeave: endDrag,
+      onDoubleClick,
+      onContextMenu: event => event.preventDefault(),
       children: [
         jsxs('g', {
           className: 'ia-iso',
@@ -1081,19 +1310,42 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
           children: [
             plan.platforms.map((p, i) => jsx(PlatformView, { platform: p, next: plan.platforms[i + 1] }, `plat-${p.t}`)),
             plan.platforms.map(p => jsx(PlatformLabel, { platform: p }, `plat-label-${p.t}`)),
-            routed.map(route => jsx(EdgeView, { route, selectedId, pulseFor, labelHint: labelHintOf(route) }, route.key)),
+            routed.map(route => {
+              const hot =
+                Boolean(selectedId) && (route.edge.source_id === selectedId || route.edge.target_id === selectedId)
+              const blocked =
+                pulseFor &&
+                (pulseFor(route.edge.source_id) === 'touch_blocked' || pulseFor(route.edge.target_id) === 'touch_blocked')
+              return jsx(
+                EdgeView,
+                {
+                  route,
+                  selectedId,
+                  burst: Boolean(blocked),
+                  labelHint: labelHintOf(route),
+                  animated: !lean || Boolean(hot) || Boolean(blocked)
+                },
+                route.key
+              )
+            }),
             ordered.map(({ info, fresh }) =>
-              jsx(IsoNode, {
-                node: info.node,
-                info,
-                active: info.node.id === selectedId,
-                pulse: pulseFor(info.node.id),
-                fresh,
-                delay: Math.min(920, info.u * 20),
-                showTitle: showTitleFor(info.node),
-                showAddress,
-                onSelect
-              }, info.node.id))
+              jsx(
+                IsoNode,
+                {
+                  node: info.node,
+                  info,
+                  active: info.node.id === selectedId,
+                  pulse: pulseFor(info.node.id),
+                  fresh,
+                  delay: Math.min(920, info.u * 20),
+                  showTitle: showTitleFor(info.node),
+                  showAddress,
+                  animated: !lean || info.node.id === selectedId || Boolean(pulseFor(info.node.id)) || notable(info.node),
+                  onSelect
+                },
+                info.node.id
+              )
+            )
           ]
         })
       ]
@@ -1226,6 +1478,8 @@ function InfraAtlasPage() {
   const [busy, setBusy] = React.useState('')
   const [zoom, setZoom] = React.useState(1)
   const [offset, setOffset] = React.useState({ x: 0, y: 0 })
+  const [interacted, setInteracted] = React.useState(false)
+  const mapApi = React.useRef(null)
   const [policyOpen, setPolicyOpen] = React.useState(false)
   const [legendOpen, setLegendOpen] = React.useState(false)
   const [activityOpen, setActivityOpen] = React.useState(false)
@@ -1368,7 +1622,9 @@ function InfraAtlasPage() {
                     zoom,
                     setZoom,
                     offset,
-                    setOffset
+                    setOffset,
+                    api: mapApi,
+                    onInteract: () => setInteracted(true)
                   })
                 : jsx('div', {
                     className: 'ia-empty',
@@ -1388,7 +1644,15 @@ function InfraAtlasPage() {
                         })
                       ]
                     })
-                  })
+                  }),
+
+          // One-line affordance hint; disappears the moment the map is used.
+          !interacted && displayNodes.length
+            ? jsx('div', {
+                className: 'ia-map-hint',
+                children: 'drag to pan · scroll to zoom · double-click to zoom in'
+              })
+            : null
         ]
       }),
 
@@ -1671,15 +1935,16 @@ function InfraAtlasPage() {
               jsx('button', {
                 type: 'button',
                 className: 'ia-map-btn',
-                title: 'Zoom out',
-                onClick: () => setZoom(z => Math.max(0.42, z / 1.2)),
+                title: 'Zoom out (scroll or pinch anywhere on the map)',
+                onClick: () => (mapApi.current ? mapApi.current.zoomBy(1 / 1.25) : setZoom(z => Math.max(0.42, z / 1.25))),
                 children: '−'
               }),
               jsx('button', {
                 type: 'button',
                 className: 'ia-map-btn ia-map-pct',
-                title: 'Reset zoom & pan',
+                title: 'Reset view (zoom 100%, pan centred)',
                 onClick: () => {
+                  if (mapApi.current) mapApi.current.reset()
                   setZoom(1)
                   setOffset({ x: 0, y: 0 })
                 },
@@ -1688,8 +1953,8 @@ function InfraAtlasPage() {
               jsx('button', {
                 type: 'button',
                 className: 'ia-map-btn',
-                title: 'Zoom in',
-                onClick: () => setZoom(z => Math.min(2.6, z * 1.2)),
+                title: 'Zoom in (scroll up, or double-click the map)',
+                onClick: () => (mapApi.current ? mapApi.current.zoomBy(1.25) : setZoom(z => Math.min(2.6, z * 1.25))),
                 children: '+'
               }),
               jsx('span', { className: 'ia-map-sep' }),
@@ -2607,9 +2872,32 @@ const CSS = `
   inset: 0;
   overflow: hidden;
 }
-.ia-graph-wrap { position: absolute; inset: 0; }
-.ia-svg { width: 100%; height: 100%; cursor: grab; }
-.ia-svg:active { cursor: grabbing; }
+.ia-graph-wrap { position: absolute; inset: 0; contain: strict; }
+.ia-svg {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ia-svg:active, .ia-svg-dragging { cursor: grabbing; }
+.ia-map-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  z-index: 18;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+  color: var(--ui-text-tertiary, #94a3b8);
+  background: rgba(8, 12, 22, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  pointer-events: none;
+  animation: ia-fade 0.4s ease 1.2s both;
+}
 
 /* ── top floating bar ────────────────────────────────────────────────────── */
 .ia-topbar {
@@ -3306,6 +3594,11 @@ const CSS = `
 .ia-burst circle { fill: var(--ui-danger, #ef4444); opacity: 0; animation: ia-burst-fade 1.7s ease-out 3; }
 
 .ia-node { cursor: pointer; }
+
+/* A lean fleet: decoration is data. Everything else holds still so panning a
+   hundred nodes does not animate a hundred independent compositor layers. */
+.ia-still, .ia-still * { animation: none !important; }
+.ia-edge-still .ia-edge-line { animation: none; stroke-dashoffset: 0; }
 .ia-node-retired .ia-lift { opacity: 0.45; }
 .ia-node-retired .ia-beacon { display: none; }
 .ia-node-retired:hover .ia-lift { opacity: 0.85; }

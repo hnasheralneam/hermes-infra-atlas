@@ -18,12 +18,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install react for the render harness
-        run: npm install --no-save --no-package-lock react@19 react-dom@19
+      - name: Install react + jsdom for the harnesses
+        run: npm install --no-save --no-package-lock react@19 react-dom@19 jsdom@25
       - name: Syntax-check the desktop bundle
         run: node --check desktop/plugin.js
       - name: Render every registered desktop surface
         run: node tools/render_smoke.mjs --modules node_modules
+      - name: Pan, zoom and double-click behave
+        run: node tools/viewport_test.mjs --modules node_modules
 
   python:
     runs-on: ubuntu-latest

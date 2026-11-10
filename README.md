@@ -189,6 +189,14 @@ The page around it stays deliberately sparse:
   symmetric secondary row (`Unlock Chat`, `Ask Hermes`), and three tabs — `Overview`
   (pitfalls callout, field-by-field diff, properties, clickable blast radius), `Uptime`
   (24h %, latency sparkline, probe target, incident history with inline resolve), `Runbook`.
+- **Direct manipulation**: drag to pan (content follows the cursor), scroll or pinch to zoom
+  around the pointer, double-click to zoom in (shift double-click out), and the `− 100% +`
+  cluster resets or steps. Gestures are handled imperatively — the viewBox is written in a
+  rAF and React state only syncs when the gesture ends — so a hundred-node fleet pans at
+  frame rate instead of re-rendering the whole tree per pointermove.
+- **Decoration is data.** Past ~44 nodes the canvas goes lean: perpetual LED/scan/packet
+  animation is kept only for the selected node, nodes with incidents and their edges, and
+  everything else holds still (and `prefers-reduced-motion` wins everywhere).
 - **Two corner docks**: a collapsible live-activity feed (reads / touches / blocked calls) and
   a combined zoom + legend control. `Esc` or a click on empty canvas closes the drawer and
   gives the whole viewport back to the map.
