@@ -11,7 +11,9 @@ import concurrent.futures
 import errno
 import ipaddress
 import logging
+import re
 import socket
+import subprocess
 import ssl
 import time
 import urllib.error
@@ -129,6 +131,45 @@ def _host_of(address: str) -> str:
     return host or text
 
 
+_LOCAL_NETS: Optional[list[Any]] = None
+
+
+def _local_networks() -> list[Any]:
+    """IPv4 networks this host is directly attached to (cached per process)."""
+    global _LOCAL_NETS
+    if _LOCAL_NETS is not None:
+        return _LOCAL_NETS
+    nets: list[Any] = []
+    try:
+        out = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        for line in out.stdout.splitlines():
+            match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/(\d+)", line)
+            if match:
+                nets.append(ipaddress.ip_network(f"{match.group(1)}/{match.group(2)}", strict=False))
+    except Exception:  # noqa: BLE001 - no `ip`, no route table: fall back to "cannot tell"
+        nets = []
+    _LOCAL_NETS = nets
+    return nets
+
+
+def _on_local_subnet(host: str) -> bool:
+    """True when the address is on a network we are plugged into.
+
+    That is what separates "the box is off" from "we cannot see that network from
+    here": only the former justifies calling a declared probe down.
+    """
+    try:
+        address = ipaddress.ip_address(str(host or "").strip().strip("[]"))
+    except ValueError:
+        return False
+    return any(address in network for network in _local_networks())
+
+
 def _is_ip_literal(host: str) -> bool:
     try:
         ipaddress.ip_address(str(host or "").strip().strip("[]"))
@@ -197,6 +238,18 @@ def probe_node(node: dict[str, Any], timeout: float = DEFAULT_TIMEOUT, ip: Optio
                 detail = "; ".join(
                     f"{candidate[1].rsplit(':', 1)[-1]}: {attempt[2]}" for candidate, attempt in attempts
                 )[:200]
+    # A declared probe on a literal address is the operator asserting "this answers
+    # here". Silence on that address is an outage; "no route" stays unknown because
+    # that really is this host's problem, not the node's.
+    if (
+        declared
+        and status == "unknown"
+        and "timed out" in str(detail).lower()
+        and _is_ip_literal(_host_of(address))
+        and _on_local_subnet(_host_of(address))
+    ):
+        status = "down"
+        detail = str(detail).replace("unreachable from this host: timed out", "no answer (connection timed out)")
     incident_eligible = declared or str(node.get("kind") or "") == "model_endpoint"
     return {
         "id": node_id,

@@ -382,6 +382,14 @@ class AtlasStore:
             existing = self.get_node(node_id)
             merged: dict[str, Any] = dict(existing or {})
             merged.update({k: v for k, v in node.items() if v is not None})
+            # A documented row is rebuilt from the registry on every sweep. Fields the
+            # registry does not claim — and that no collector filled in this time — must
+            # not survive from an earlier, wrong correlation (a host once "backed" by a
+            # same-named unit on another machine kept claiming that unit forever).
+            if node.get("registry_path"):
+                for field in ("managed_by", "systemd_unit", "tailnet_ip", "parent_id", "recovery_cmd", "pitfalls_summary", "live_state"):
+                    if field in node and node.get(field) is None:
+                        merged[field] = None
             merged["id"] = node_id
             merged["updated_at"] = _now()
             merged.setdefault("kind", "service")

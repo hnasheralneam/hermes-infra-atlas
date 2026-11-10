@@ -1790,7 +1790,12 @@ function InfraAtlasPage() {
                   jsxs('button', {
                     type: 'button',
                     className: cn('ia-btn ia-btn-ghost', policyOpen && 'ia-btn-active'),
-                    title: 'Configure guardrail & downtime response policies',
+                    title:
+                      guardrailMode === 'off'
+                        ? 'Read-before-touch is off: tools can change this infrastructure without reading its registry entry first. Click to change.'
+                        : guardrailMode === 'warn'
+                          ? 'Read-before-touch is on but only warns: tools may touch a node before its registry entry is read. Click to change.'
+                          : 'Read-before-touch is on: tools that touch a node are blocked until its registry entry has been read. Click to change.',
                     onClick: () => {
                       setPolicyOpen(o => !o)
                       setLegendOpen(false)
@@ -1807,7 +1812,11 @@ function InfraAtlasPage() {
                                 : 'var(--ui-text-quaternary, #6b7280)'
                         }
                       }),
-                      `Guard: ${guardrailMode}`
+                      guardrailMode === 'off'
+                        ? 'Guardrail: off'
+                        : guardrailMode === 'warn'
+                          ? 'Guardrail: warns'
+                          : 'Guardrail: blocking'
                     ]
                   }),
                   policyOpen
@@ -2209,7 +2218,10 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
   const doUnlock = () =>
     runWithBusy(setBusy, `unlock:${item.id}`, async () => {
       await rest('/session-unlock', { method: 'POST', body: { session_id: activeSession, node_id: item.id } })
-      host.notify({ kind: 'info', message: `Unlocked ${item.label || item.id} for active chat` })
+      host.notify({
+        kind: 'info',
+        message: `Agent actions on ${item.label || item.id} are allowed for the rest of this chat`
+      })
       await onRefetch()
     })
 
@@ -2302,7 +2314,11 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                     className: 'ia-btn ia-btn-primary ia-btn-full',
                     disabled: Boolean(busy),
                     onClick: () => doReconcile('adopt_live'),
-                    children: drift === 'unregistered' ? '✓ Register in KB' : '✓ Adopt Live Drift'
+                    title:
+                      drift === 'unregistered'
+                        ? 'Write a registry entry for this live node so it stops counting as undocumented drift.'
+                        : 'Rewrite the registry fields (address, ports, unit) to match what is actually running.',
+                    children: drift === 'unregistered' ? '✓ Add to registry' : '✓ Update registry to match live'
                   })
                 : null,
               !isRetired && isDown && item.recovery_cmd
@@ -2315,7 +2331,8 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                         await onRefetch()
                         await detail.refetch()
                       }),
-                    children: '↻ Run Playbook'
+                    title: `Run the documented recovery command: ${item.recovery_cmd}`,
+                    children: '↻ Run recovery command'
                   })
                 : null,
               !isRetired && item.registry_path && guardrail !== 'off'
@@ -2323,8 +2340,11 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                     type: 'button',
                     className: cn('ia-btn ia-btn-ghost ia-btn-flex', isUnlocked && 'ia-btn-unlocked'),
                     disabled: Boolean(busy) || isUnlocked,
+                    title: isUnlocked
+                      ? 'Agent tool calls may touch this node for the rest of this chat.'
+                      : 'The guardrail blocks tools that touch a node until its registry entry has been read. Unlock to lift that for this node until the chat ends.',
                     onClick: doUnlock,
-                    children: isUnlocked ? '✓ Unlocked' : '✓ Unlock Chat'
+                    children: isUnlocked ? '✓ Agent actions allowed' : '🔓 Allow agent actions'
                   })
                 : null,
               jsx('button', {

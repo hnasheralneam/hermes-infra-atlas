@@ -79,6 +79,19 @@ if (retiredDrawn) {
 }
 console.log('ok   status:removed entries stay off the map')
 
+// Health has to be visible in the picture, not just in the drawer: a down node
+// draws a red beacon, and a stale node says so on its chip.
+const downBeacons = (page?.html?.match(/ia-beacon-down/g) || []).length
+if (!downBeacons) {
+  console.log('FAIL no down node rendered a red beacon')
+  process.exit(1)
+}
+console.log(`ok   ${downBeacons} down node(s) render a red beacon`)
+if (!/ia-edge|ia-chip/i.test(page?.html || '')) {
+  console.log('FAIL drift/edge decoration missing from the scene')
+  process.exit(1)
+}
+
 const drawn = (page?.html?.match(/data-node-id="/g) || []).length
 const allBadge = page?.html?.match(/<span class="ia-seg-count">(\d+)<\/span>/g) || []
 if (!drawn) {

@@ -226,3 +226,88 @@ def test_unreachable_is_not_the_same_as_down(plugin_home):
     # A closed port on a host that answers is a real outage.
     result = probes.collect([{"id": "n-refused", "probe": "tcp://127.0.0.1:9"}], timeout=0.6)
     assert result.nodes[0]["health_status"] == "down"
+
+
+def test_declared_probe_timeout_is_down_not_unknown(plugin_home, monkeypatch):
+    """Silence on an address the registry declared is an outage, not a vantage bug."""
+    H.load_plugin()
+    probes = H.submodule("collectors.probes")
+
+    def boom(*args, **kwargs):
+        raise socket.timeout("timed out")
+
+    monkeypatch.setattr(probes.socket, "create_connection", boom)
+    # the node is on a network this host is plugged into, so silence means it is off
+    monkeypatch.setattr(probes, "_on_local_subnet", lambda host: True)
+
+    declared = probes.probe_node(
+        {"id": "srv-cyberfield", "kind": "server", "probe": "tcp://10.0.0.193:8006"},
+        timeout=0.1,
+    )
+    assert declared["health_status"] == "down"
+    assert "no answer" in declared["live_state"]["probe_detail"]
+
+    inferred = probes.probe_node(
+        {"id": "svc-guess", "kind": "service", "host_ip": "10.0.0.194", "ports": ["8006"], "probe_inferred": True},
+        timeout=0.1,
+    )
+    assert inferred["health_status"] == "unknown"
+
+
+def test_no_route_stays_unknown(plugin_home, monkeypatch):
+    """EHOSTUNREACH means this host cannot see the network, which is not drift."""
+    H.load_plugin()
+    probes = H.submodule("collectors.probes")
+
+    def unreachable(*args, **kwargs):
+        raise OSError(113, "No route to host")
+
+    monkeypatch.setattr(probes.socket, "create_connection", unreachable)
+    monkeypatch.setattr(probes, "_on_local_subnet", lambda host: True)
+    result = probes.probe_node({"id": "srv-far", "kind": "server", "probe": "tcp://10.0.0.193:8006"}, timeout=0.1)
+    assert result["health_status"] == "unknown"
+
+
+def test_a_local_unit_never_claims_a_host_on_another_machine(plugin_home):
+    """A documented host is not "up" because something with the same name runs here."""
+    H.load_plugin()
+    fusion = H.submodule("fusion")
+
+    doc_nodes = [
+        {
+            "id": "srv-cyberfield",
+            "kind": "server",
+            "stratum": 1,
+            "label": "Cyberfield Proxmox — 10.0.0.193",
+            "host_ip": "10.0.0.193",
+            "ports": ["8006"],
+            "probe": "tcp://10.0.0.193:8006",
+            "doc_status": "active",
+            "health_status": "unknown",
+            "aliases": ["cyberfield-template-mirror", "svc-cyberfield-template-mirror"],
+            "registry_path": "servers/cyberfield.md",
+        }
+    ]
+    live_nodes = [
+        {"id": "srv-this-host", "kind": "server", "label": "this host", "host_ip": "10.0.0.75", "health_status": "up"},
+        {
+            "id": "svc-cyberfield-template-mirror",
+            "kind": "service",
+            "label": "cyberfield-template-mirror",
+            "parent_id": "srv-this-host",
+            "systemd_unit": "cyberfield-template-mirror.service",
+            "managed_by": "systemd-user",
+            "health_status": "up",
+            "live_state": {"source": "local", "active": "active (timer)"},
+        },
+    ]
+    merged, matched = fusion._correlate(doc_nodes, live_nodes)
+
+    host = merged["srv-cyberfield"]
+    assert "srv-cyberfield" not in matched
+    assert host["health_status"] == "unknown"
+    assert host.get("managed_by") is None
+    assert host.get("systemd_unit") is None
+    assert "_live" not in host
+    # the unit stays its own node instead of being swallowed by the host entry
+    assert "svc-cyberfield-template-mirror" in merged

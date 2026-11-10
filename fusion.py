@@ -139,6 +139,23 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
                         break
             if target_id is None and live_family == "host" and len(host_candidates) == 1:
                 target_id = host_candidates[0]
+        # A shared name is not a shared machine. Alias/label/unit matches used to
+        # fuse a documented host with whatever unit happened to carry its name on
+        # another box, which is how a dead Proxmox host reported "up" because a
+        # timer on this host was healthy. Reject cross-host name matches, and keep
+        # workloads out of host entries.
+        if target_id is not None and target_id != live_id:
+            doc = by_id.get(target_id) or {}
+            doc_ip = str(doc.get("host_ip") or "")
+            live_ip = str(live.get("host_ip") or "")
+            if not live_ip and live.get("parent_id"):
+                parent = by_id.get(str(live["parent_id"])) or {}
+                live_ip = str(parent.get("host_ip") or "")
+            doc_host_family = str(doc.get("kind") or "") in {"server", "vm", "lxc"}
+            if doc_ip and live_ip and doc_ip != live_ip:
+                target_id = None
+            elif doc_host_family and live_kind in {"service", "container", "cron", "project"}:
+                target_id = None
         if target_id is None and live.get("tailnet_ip") and live_kind in {"server", "vm", "lxc", "peer"}:
             for candidate, doc in by_id.items():
                 if str(doc.get("kind")) not in {"server", "vm", "lxc", "service"}:
@@ -441,6 +458,7 @@ def run_sweep(
             node["health_status"] = observation.get("health_status") or "unknown"
             node["latency_ms"] = observation.get("latency_ms")
             node["_probed"] = True
+            node["_probe_status"] = str(observation.get("health_status") or "unknown")
             node["live_state"] = {**(node.get("live_state") or {}), **(observation.get("live_state") or {})}
             if observation.get("health_status") == "up":
                 node["last_seen_live_at"] = time.time()
@@ -452,7 +470,9 @@ def run_sweep(
     transitions: list[tuple[dict[str, Any], Optional[str], list[dict[str, Any]]]] = []
     for node in nodes.values():
         node.setdefault("health_status", "unknown")
-        if node.get("_live") and node["health_status"] == "unknown":
+        # A probe that actually answered outranks a collector's opinion; only fill
+        # in an unknown from live state when the probe had nothing to say.
+        if node.get("_live") and node["health_status"] == "unknown" and node.get("_probe_status") not in {"up", "down"}:
             live_health = (node["_live"].get("health_status") or "").strip()
             if live_health == "down" and str(node.get("auto_heal_policy") or "") == "off" and str((node["_live"].get("live_state") or {}).get("status") or "") == "stopped":
                 live_health = "unknown"
@@ -466,6 +486,7 @@ def run_sweep(
         node.pop("_unregistered", None)
         node.pop("_runtime", None)
         node.pop("_probed", None)
+        node.pop("_probe_status", None)
         node.setdefault("doc_state", {})
         node.setdefault("updated_at", now)
         if not node.get("label"):
