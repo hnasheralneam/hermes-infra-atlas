@@ -111,6 +111,10 @@ function useNode(nodeId) {
 // 3-D shape standing on its platform, and edges are routed on the tile grid
 // like circuit traces, fanning into parallel lanes where they run together.
 
+// Bumped whenever the bundle changes, so a reload can be verified from the page:
+//   document.querySelector('.ia-root').dataset.build
+const BUILD = 'f15e782'
+
 const ISO = { tileW: 64, tileH: 32, stepZ: 13, slab: 10, pitch: 2, pad: 30 }
 const ISO_HW = ISO.tileW / 2
 const ISO_HH = ISO.tileH / 2
@@ -1889,6 +1893,7 @@ function InfraAtlasPage() {
 
   return jsxs('div', {
     className: cn('ia-root', lightTheme && 'ia-light'),
+    'data-build': BUILD,
     children: [
       jsx('style', { children: CSS }),
 

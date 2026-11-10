@@ -109,6 +109,12 @@ if (!/ia-edge|ia-chip/i.test(page?.html || '')) {
 // The plugin host themes the frame with --foreground / --card / --muted-foreground.
 // Consuming only the in-tree --ui-* names is what left the canvas dark while the
 // app's text turned black in light mode.
+if (!/data-build="[0-9a-f]{7,}"/.test(page?.html || '')) {
+  console.log('FAIL the page does not expose data-build (needed to verify a desktop reload)')
+  process.exit(1)
+}
+console.log('ok   page exposes data-build for reload verification')
+
 for (const token of ['var(--foreground', 'var(--card', 'var(--muted-foreground']) {
   if (!(page?.html || '').includes(token)) {
     console.log(`FAIL the page does not consume the frame theme token ${token})`)
