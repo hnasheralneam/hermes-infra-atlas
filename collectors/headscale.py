@@ -78,7 +78,10 @@ def collect() -> CollectorResult:
                 "label": hostname or (ips[0] if ips else "tailnet node"),
                 "tailnet_ip": ips[0] if ips else None,
                 "managed_by": "headscale",
-                "health_status": "up" if online else "down",
+                # A tailnet peer being offline is not an outage we can fix: it is a laptop
+                # with the lid shut. "unknown" keeps the beacon neutral instead of
+                # painting eighteen personal devices red on the fleet map.
+                "health_status": "up" if online else "unknown",
                 "live_state": {
                     "source": "headscale",
                     "online": online,

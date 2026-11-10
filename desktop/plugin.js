@@ -208,29 +208,41 @@ function planScene(nodes) {
   const strata = Array.from(byStratum.keys()).sort((a, b) => a - b)
 
   const placed = new Map()
-  const specs = []
-  strata.forEach((stratum, t) => {
-    const members = byStratum.get(stratum)
-    const groups = new Map()
-    const loose = []
-    members.forEach(node => {
-      if (node.parent_id && placed.has(node.parent_id)) {
-        if (!groups.has(node.parent_id)) groups.set(node.parent_id, [])
-        groups.get(node.parent_id).push(node)
-      } else loose.push(node)
-    })
-    const ordered = []
-    Array.from(groups.entries())
-      .sort((a, b) => placed.get(a[0]).col - placed.get(b[0]).col)
-      .forEach(([, group]) => {
-        group.sort(byLabel)
-        ordered.push(...group)
-      })
-    loose.sort(byLabel)
-    ordered.push(...loose)
+  const nodeById = new Map(nodes.map(node => [node.id, node]))
+  const stratumOf = node => Math.min(4, Math.max(1, Number(node.stratum || 3)))
 
-    specs.push({ t, stratum, ordered, z: strata.length - 1 - t })
+  // Order inside a terrace: a node whose parent sits in a lower terrace takes that
+  // parent's position as its sort key, so guests land in the same part of the grid
+  // as the hypervisor above them instead of wherever the alphabet puts them.
+  // Terraces are processed bottom-up, so every parent index is already known
+  // (the old code consulted the placement map before anything had been placed,
+  // which is why this never ran).
+  const orderIndex = new Map()
+  const orderedByStratum = new Map()
+  strata.forEach(stratum => {
+    const keyed = byStratum.get(stratum).map(node => {
+      const parent = node.parent_id ? nodeById.get(node.parent_id) : null
+      const parentIndex = parent && stratumOf(parent) < stratum ? orderIndex.get(parent.id) : undefined
+      return { node, parentIndex, parentId: String(node.parent_id || ''), label: String(node.label || node.id) }
+    })
+    keyed.sort((a, b) => {
+      const left = a.parentIndex === undefined ? Infinity : a.parentIndex
+      const right = b.parentIndex === undefined ? Infinity : b.parentIndex
+      if (left !== right) return left - right
+      if (a.parentId !== b.parentId) return a.parentId < b.parentId ? -1 : 1
+      return a.label.localeCompare(b.label)
+    })
+    keyed.forEach(({ node }, index) => orderIndex.set(node.id, index))
+    orderedByStratum.set(stratum, keyed.map(({ node }) => node))
   })
+
+  const specs = strata.map((stratum, t) => ({
+    t,
+    stratum,
+    count: byStratum.get(stratum).length,
+    ordered: orderedByStratum.get(stratum),
+    z: strata.length - 1 - t
+  }))
 
   // Terrace shape: a single row makes a 30-tile ribbon, one tile deep. Packing a
   // tier up to three rows deep trades width for depth and keeps the diorama
@@ -239,8 +251,8 @@ function planScene(nodes) {
   const buildPlatforms = rowsList => {
     const sized = specs.map((spec, index) => {
       const wanted = rowsList[index] || 1
-      const rows = Math.max(1, Math.min(3, Math.min(spec.ordered.length, wanted)))
-      const cols = Math.max(1, Math.ceil(spec.ordered.length / rows))
+      const rows = Math.max(1, Math.min(3, Math.min(spec.count, wanted)))
+      const cols = Math.max(1, Math.ceil(spec.count / rows))
       return { ...spec, rows, cols, D: rows * ISO.pitch + 2 }
     })
     const W = Math.max(...sized.map(spec => spec.cols * ISO.pitch + 4))
@@ -280,7 +292,7 @@ function planScene(nodes) {
     (acc, spec) => {
       const next = []
       acc.forEach(prefix => {
-        const cap = Math.min(3, Math.max(1, spec.ordered.length))
+        const cap = Math.min(3, Math.max(1, spec.count))
         for (let rows = 1; rows <= cap; rows++) next.push([...prefix, rows])
       })
       return next
@@ -2514,7 +2526,7 @@ function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode, i
           properties.length
             ? jsx('div', {
                 className: 'ia-prop-grid',
-                children: properties.map(([label, value]) => propCard(label, value))
+                children: properties.map(([label, value]) => propCard(label, value, label))
               })
             : jsx('div', { className: 'ia-muted', children: 'No live state recorded for this node.' })
         ]
@@ -2591,14 +2603,18 @@ function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode, i
   })
 }
 
-function propCard(label, value) {
-  return jsxs('div', {
-    className: 'ia-prop',
-    children: [
-      jsx('div', { className: 'ia-prop-label', children: label }),
-      jsx('div', { className: 'ia-prop-val', children: String(value) })
-    ]
-  })
+function propCard(label, value, key) {
+  return jsxs(
+    'div',
+    {
+      className: 'ia-prop',
+      children: [
+        jsx('div', { className: 'ia-prop-label', children: label }),
+        jsx('div', { className: 'ia-prop-val', children: String(value) })
+      ]
+    },
+    key
+  )
 }
 
 function UptimeSection({ item, probes, incidents, busy, setBusy, onRefetch, detail, isRetired }) {

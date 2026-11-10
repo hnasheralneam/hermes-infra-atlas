@@ -138,13 +138,17 @@ atlas_tools.py       the six tools
 dashboard/           FastAPI routes under /api/plugins/infra-atlas
 desktop/plugin.js    full-page graph, inspector, statusbar chip, ::infra / ::drift cards
 skills/infra-atlas/  the bundled protocol skill
-tests/               pytest suite (registry, fusion, gate, uptime, collectors, API)
+tests/               pytest suite (registry, fusion, gate, uptime, collectors, API, registration)
 ```
 
 ## Tests
 
 ```bash
+tools/check.sh                       # every gate: compile, syntax, 8 surfaces, gestures,
+                                     # layout, manifest validation, pytest, coverage floor
 PYTHONPATH=<hermes-agent checkout> python -m pytest
+PYTHONPATH=<hermes-agent checkout> python -m coverage run --source=. --omit='tests/*,tools/*,desktop/*' -m pytest
+python -m coverage report      # 82% of statements; tools/check.sh fails under 75%
 hermes plugins doctor .
 hermes plugins validate .
 ```
@@ -187,6 +191,11 @@ pan/zoom — still selectable, keyboard-reachable and crisp at any zoom):
   semantics: blocked
   calls shake the node with red ripples and scatter red packets along its
   edges; reads and allowed touches flash cyan/green.
+- **Guests follow their hypervisor.** Within a terrace a node whose parent sits in a lower
+  terrace sorts by the parent's position, so the VMs of a host land together in the same part
+  of the grid as that host, ahead of unrelated nodes that happen to sort earlier.
+- Tailnet peers report `up` when online and `unknown` when not: a laptop with the lid shut is
+  not an outage, and eighteen red beacons would drown the fleet's real signal.
 - Terraces pack **up to three rows deep** and the depth is chosen per tier: every row
   combination (at most 3⁴) is measured and the one closest to a 1.4:1 footprint wins, with
   the most compact packing breaking ties. A forty-service tier becomes 14×3 instead of a

@@ -89,7 +89,14 @@ and a dashboard router.
 
 ## Verification in this repo
 
-- `pytest`: 68 passed (registry parse/write, fusion drift, guardrail, uptime, collectors, API,
-  tools). One test skips where `ruamel.yaml` is absent.
+- `pytest`: 93 passed, 1 skipped (the skip needs `ruamel.yaml`). Coverage of the plugin package
+  is 82% of statements (`coverage run --source=. -m pytest`); CI fails under 75%.
+- Desktop: `tools/render_smoke.mjs` renders all 8 registered surfaces and asserts a down node
+  draws a red beacon and retired entries stay off the map; `tools/viewport_test.mjs` drives the
+  real component in JSDOM — wheel zoom stays anchored under the cursor, drag pans in the
+  direction of the pointer, a 40-node tier packs three rows, guests stay next to their
+  hypervisor, and no two nodes share a tile.
 - `hermes plugins doctor`: 6 tools, 3 hooks, no drift.
 - `hermes plugins validate`: all checks pass, including `no core override` and `desktop surface`.
+- Verified from a fresh `git clone` of `main`: pytest, render smoke, viewport test and
+  `plugins validate` all pass with nothing but a Hermes checkout on `PYTHONPATH`.

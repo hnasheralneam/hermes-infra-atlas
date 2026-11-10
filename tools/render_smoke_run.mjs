@@ -3,6 +3,20 @@
 import { renderToString, renderToStaticMarkup } from 'react-dom/server'
 import { pathToFileURL } from 'node:url'
 
+// React warnings fail the build: a missing key or a bad prop renders fine in a
+// screenshot and breaks in front of an operator.
+const reactWarnings = []
+for (const level of ['error', 'warn']) {
+  const original = console[level]
+  console[level] = (...args) => {
+    const text = String(args[0] ?? '')
+    if (/Warning:|Each child in a list|React does not recognize|cannot appear as a child|validateDOMNesting/i.test(text)) {
+      reactWarnings.push(text.split('\n')[0])
+    }
+    original(...args)
+  }
+}
+
 const plugin = (await import(pathToFileURL(new URL('./plugin.mjs', import.meta.url).pathname).href)).default
 
 const surfaces = []
@@ -99,6 +113,14 @@ if (!drawn) {
   process.exit(1)
 }
 console.log(`ok   ${drawn} nodes drawn (retired excluded)`)
+
+const uniqueWarnings = [...new Set(reactWarnings)]
+if (uniqueWarnings.length) {
+  console.log(`FAIL ${uniqueWarnings.length} React warning(s):`)
+  for (const warning of uniqueWarnings) console.log(`     ${warning}`)
+  process.exit(1)
+}
+console.log('ok   no React warnings from any surface')
 
 console.log(`\n${results.length - failed.length}/${results.length} surfaces rendered`)
 process.exit(failed.length ? 1 : 0)

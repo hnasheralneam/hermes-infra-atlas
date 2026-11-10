@@ -212,7 +212,10 @@ def _tailscale_peers() -> list[dict[str, Any]]:
     except ValueError:
         return []
     peers = []
-    for peer in (data.get("Peer") or {}).values():
+    raw_peers = data.get("Peer") or {}
+    # `tailscale status --json` gives a hostname-keyed object; tolerate a list from
+    # a future/alternate CLI rather than crashing the whole sweep.
+    for peer in (raw_peers.values() if isinstance(raw_peers, dict) else raw_peers):
         ips = [ip for ip in (peer.get("TailscaleIPs") or []) if str(ip).startswith("100.")]
         if not ips:
             continue
@@ -334,7 +337,9 @@ def collect() -> CollectorResult:
                 "label": peer["hostname"],
                 "tailnet_ip": peer["tailnet_ip"],
                 "managed_by": "tailscale",
-                "health_status": "up" if peer["online"] else "down",
+                # Offline peer != our outage: a laptop with the lid shut is unknown,
+                # not red. Peers never page, so this only affects the picture.
+                "health_status": "up" if peer["online"] else "unknown",
                 "live_state": {"source": "local", "tailscale": peer},
                 "last_seen_live_at": time.time() if peer["online"] else None,
             }

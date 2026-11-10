@@ -311,3 +311,26 @@ def test_a_local_unit_never_claims_a_host_on_another_machine(plugin_home):
     assert "_live" not in host
     # the unit stays its own node instead of being swallowed by the host entry
     assert "svc-cyberfield-template-mirror" in merged
+
+
+def test_tailscale_peer_offline_is_unknown_not_down(plugin_home, monkeypatch):
+    """A closed laptop is not an outage: peers must not paint the fleet red."""
+    H.load_plugin()
+    local = H.submodule("collectors.local_host")
+
+    monkeypatch.setattr(local.shutil, "which", lambda name: "/usr/bin/tailscale" if name == "tailscale" else None)
+    payload = {
+        "Self": {"HostName": "this-host", "TailscaleIPs": ["100.64.0.26"], "Online": True, "OS": "linux"},
+        # the real CLI keys peers by hostname; the list shape must also be tolerated
+        "Peer": {
+            "laptop": {"HostName": "laptop", "TailscaleIPs": ["100.64.0.5"], "Online": False, "OS": "macOS"},
+            "desktop": {"HostName": "desktop", "TailscaleIPs": ["100.64.0.6"], "Online": True, "OS": "linux"},
+        },
+    }
+    monkeypatch.setattr(local, "_run", lambda argv, timeout=2.0: (0, json.dumps(payload)))
+    result = local.collect()
+    by_id = {node["id"]: node for node in result.nodes}
+
+    assert by_id["srv-laptop"]["health_status"] == "unknown"
+    assert by_id["srv-desktop"]["health_status"] == "up"
+    assert by_id["srv-laptop"]["kind"] == "peer"

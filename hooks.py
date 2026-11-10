@@ -207,6 +207,8 @@ def on_pre_tool_call(
         listed = ", ".join(
             f"`{node['id']}` ({node.get('registry_path')})" for node in unread[:4]
         )
+        if len(unread) > 4:
+            listed += f" and {len(unread) - 4} more"
         pitfall = primary.get("pitfalls_summary")
         message = (
             f"{_BLOCK_PREFIX} Blocked `{tool_name}` touching registered infrastructure: {listed}. "

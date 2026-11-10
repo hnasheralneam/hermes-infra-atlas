@@ -27,6 +27,20 @@ window.Element.prototype.getBoundingClientRect = function getBoundingClientRect(
   return { ...RECT, toJSON: () => RECT }
 }
 
+// React warnings are failures here: a missing key or a bad prop is invisible in a
+// screenshot and only shows up later, in front of an operator.
+const reactWarnings = []
+for (const level of ['error', 'warn']) {
+  const original = console[level]
+  console[level] = (...args) => {
+    const text = String(args[0] ?? '')
+    if (/Warning:|Each child in a list|React does not recognize|cannot appear as a child|validateDOMNesting/i.test(text)) {
+      reactWarnings.push(text.split('\n')[0])
+    }
+    original(...args)
+  }
+}
+
 const React = await import('react')
 const { createRoot } = await import('react-dom/client')
 const module = await import('./plugin.mjs')
@@ -162,6 +176,40 @@ await fire(svg, new window.MouseEvent('dblclick', { clientX: 500, clientY: 300, 
 const postDouble = box()
 check('double-click zooms in', postDouble.w < preDouble.w - 1, `${preDouble.w.toFixed(1)} → ${postDouble.w.toFixed(1)}`)
 
+// ── drawer ─────────────────────────────────────────────────────────────────
+const nodeEl = window.document.querySelector('[data-node-id="lxc-202-cache"]')
+check('a node is clickable on the canvas', Boolean(nodeEl), 'lxc-202-cache missing')
+if (nodeEl) {
+  await React.act(async () => {
+    nodeEl.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setTimeout(resolve, 60))
+  })
+  const drawer = window.document.querySelector('.ia-drawer')
+  check('selecting a node opens the drawer', Boolean(drawer), 'no .ia-drawer')
+  const text = drawer ? drawer.textContent : ''
+  check('the drawer names the node', text.includes('cache-tank'), text.slice(0, 80))
+  check('the drawer shows the drift diff', text.includes('10.20.0.30') && text.includes('10.20.0.22'))
+  check('the drawer surfaces the documented pitfall', text.includes('Dial 10.20.0.22:6379'))
+  const tabs = Array.from(window.document.querySelectorAll('.ia-drawer-tabs button'))
+  check('the drawer has overview / uptime / runbook tabs', tabs.length === 3, tabs.map(tab => tab.textContent).join('|'))
+  const uptimeTab = tabs.find(tab => /uptime/i.test(tab.textContent || ''))
+  if (uptimeTab) {
+    await React.act(async () => {
+      uptimeTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+      await new Promise(resolve => setTimeout(resolve, 60))
+    })
+    check('the uptime tab renders probe history', window.document.querySelector('.ia-drawer').textContent.includes('99.4'))
+  }
+  const runbookTab = tabs.find(tab => /runbook/i.test(tab.textContent || ''))
+  if (runbookTab) {
+    await React.act(async () => {
+      runbookTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+      await new Promise(resolve => setTimeout(resolve, 60))
+    })
+    check('the runbook tab renders the markdown body', window.document.querySelector('.ia-drawer').textContent.includes('Dial 10.20.0.22:6379'))
+  }
+}
+
 // ── terrace packing ────────────────────────────────────────────────────────
 const makeNodes = (count, stratum) =>
   Array.from({ length: count }, (_, index) => ({
@@ -183,6 +231,35 @@ const cells = new Set()
 big.placed.forEach(info => cells.add(`${info.gx},${info.gy}`))
 check('no two nodes share a tile', cells.size === 40, `${cells.size} distinct tiles`)
 
+// A guest must sit next to its hypervisor, not wherever the alphabet lands.
+const layoutNodes = [
+  { id: 'srv-a', kind: 'server', stratum: 1, label: 'alpha-host' },
+  { id: 'srv-b', kind: 'server', stratum: 1, label: 'beta-host' },
+  { id: 'vm-a1', kind: 'vm', stratum: 2, label: 'zzz-vm-a1', parent_id: 'srv-a' },
+  { id: 'vm-a2', kind: 'vm', stratum: 2, label: 'zzz-vm-a2', parent_id: 'srv-a' },
+  { id: 'vm-b1', kind: 'vm', stratum: 2, label: 'aaa-vm-b1', parent_id: 'srv-b' },
+  { id: 'vm-b2', kind: 'vm', stratum: 2, label: 'aaa-vm-b2', parent_id: 'srv-b' },
+  { id: 'svc-loose', kind: 'service', stratum: 2, label: 'mmm-service' }
+]
+const grouped = planScene(layoutNodes)
+const compute = grouped.platforms.find(platform => platform.stratum === 2)
+// grid order = row-major, so this is the slot index a node occupies on the terrace
+const order = Array.from(grouped.placed.entries())
+  .filter(([, info]) => info.t === compute.t)
+  .sort((a, b) => a[1].gy - b[1].gy || a[1].gx - b[1].gx)
+  .map(([id]) => id)
+const idx = id => order.indexOf(id)
+check('guests follow their hypervisor, not the alphabet', idx('vm-a1') < idx('vm-b1'), order.join(' < '))
+check('siblings stay adjacent', Math.abs(idx('vm-a1') - idx('vm-a2')) === 1 && Math.abs(idx('vm-b1') - idx('vm-b2')) === 1, order.join(' < '))
+check('ungrouped nodes fill in after the family groups', idx('svc-loose') > idx('vm-b2'), order.join(' < '))
+
+// Degenerate fleets must not throw: an empty registry is the first thing a new
+// user sees, and a one-node fleet is the second.
+const empty = planScene([])
+check('an empty fleet plans an empty scene', empty.platforms.length === 0 && empty.placed.size === 0, JSON.stringify(empty.platforms))
+const single = planScene([{ id: 'only', kind: 'service', stratum: 3, label: 'only node' }])
+check('a single-node fleet still places it', single.placed.size === 1 && single.platforms.length === 1, `${single.placed.size} placed`)
+
 const small = planScene(makeNodes(5, 3))
 check('a small tier stays shallow', small.platforms[0].rows <= 2, `rows ${small.platforms[0].rows}`)
 
@@ -197,6 +274,9 @@ check(
 const animated = window.document.querySelectorAll('animateMotion').length
 const nodes = window.document.querySelectorAll('[data-node-id]').length
 check('bounded SMIL: no more packets than edges on a small fleet', animated <= nodes * 2, `${animated} anim / ${nodes} nodes`)
+
+const uniqueWarnings = [...new Set(reactWarnings)]
+check('no React warnings while rendering and driving the UI', uniqueWarnings.length === 0, uniqueWarnings.join(' | '))
 
 console.log(failures.length ? `\n${failures.length} failure(s)` : '\nviewport interactions behave')
 process.exit(failures.length ? 1 : 0)

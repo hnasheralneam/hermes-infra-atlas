@@ -290,3 +290,63 @@ def test_a_service_port_touch_only_needs_that_service_read(plugin_home, registry
 
     # A bare address still demands the host it names.
     assert [n["id"] for n in matcher.required_nodes(store, "ssh root@10.0.0.143 uptime")] == ["srv-host"]
+
+
+def test_block_message_counts_the_nodes_it_did_not_list(plugin_home, registry):
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    hooks = H.submodule("hooks")
+    H.submodule("matcher").refresh()
+    for index in range(6):
+        store.upsert_node(
+            {
+                "id": f"svc-fleet-{index}",
+                "kind": "service",
+                "label": f"fleet {index}",
+                "host_ip": "10.0.0.143",
+                "ports": [str(9000 + index)],
+                "registry_path": f"services/fleet-{index}.md",
+            }
+        )
+    command = " && ".join(f"systemctl restart fleet-{index}.service" for index in range(6))
+    verdict = hooks.on_pre_tool_call(tool_name="terminal", args={"command": command}, session_id="s-blocks")
+    assert verdict and verdict["action"] == "block"
+    assert "and" in verdict["message"] and "more" in verdict["message"]
+
+
+def test_a_read_only_command_is_never_blocked(plugin_home, registry):
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    hooks = H.submodule("hooks")
+    store.upsert_node(
+        {"id": "svc-litellm", "kind": "service", "label": "LiteLLM", "host_ip": "10.0.0.212",
+         "ports": ["4000"], "systemd_unit": "litellm.service", "managed_by": "systemd-user",
+         "registry_path": "services/litellm.md"}
+    )
+    H.submodule("matcher").refresh()
+    for command in (
+        "cat /home/sysadmin/.hermes/infra-registry/services/litellm.md",
+        "systemctl status litellm.service",
+        "curl -s http://10.0.0.212:4000/health",
+    ):
+        assert hooks.on_pre_tool_call(tool_name="terminal", args={"command": command}, session_id="s-read") is None, command
+
+
+def test_an_unrelated_command_names_nothing(plugin_home, registry):
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    hooks = H.submodule("hooks")
+    store.upsert_node(
+        {"id": "svc-litellm", "kind": "service", "label": "LiteLLM", "host_ip": "10.0.0.212",
+         "ports": ["4000"], "systemd_unit": "litellm.service", "registry_path": "services/litellm.md"}
+    )
+    H.submodule("matcher").refresh()
+    verdict = hooks.on_pre_tool_call(
+        tool_name="terminal",
+        args={"command": "systemctl restart nginx-logrotate.service"},
+        session_id="s-unrelated",
+    )
+    assert verdict is None
