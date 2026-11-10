@@ -1,6 +1,6 @@
 name: infra-atlas
 repo: https://github.com/hnasheralneam/hermes-infra-atlas
-sha: "dc84a1c634cc20b4bdb48cf4a0e156bbbb19555a"
+sha: "3361539da25e6ec6a12ace57e8f2d71a3136b4f5"
 description: Registry-backed infrastructure graph with drift detection, a read-before-touch guardrail, and autonomous downtime response.
 maintainer: hnasheralneam
 tier: community
