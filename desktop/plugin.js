@@ -1490,6 +1490,14 @@ function InfraAtlasPage() {
     pendingSelect = null
   }, [])
 
+  // The gesture hint is a first-run nudge, not furniture: it retires on first
+  // interaction or after a few seconds, whichever comes first.
+  React.useEffect(() => {
+    if (interacted) return undefined
+    const timer = setTimeout(() => setInteracted(true), 9000)
+    return () => clearTimeout(timer)
+  }, [interacted])
+
   React.useEffect(() => {
     const onKey = event => {
       if (event.key === 'Escape') {
