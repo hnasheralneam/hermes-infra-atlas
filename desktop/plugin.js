@@ -1004,7 +1004,8 @@ const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, 
       event.stopPropagation()
       onSelect(node.id)
     },
-    style: { '--mat': scene.mat, '--acc': scene.accent, '--d': `${delay}ms` },
+    // --ia-mat flips with the theme; the per-kind mat stays as the dark fallback.
+    style: { '--mat': `var(--ia-mat, ${scene.mat})`, '--acc': scene.accent, '--d': `${delay}ms` },
     children: [
       jsx('title', { children: `${node.label || node.id} (${node.kind}${sub ? ' · ' + sub : ''})` }),
       jsx('path', { d: `M 0 ${r2(2.5 - scene.shadow / 2)} L ${r2(scene.shadow)} 2.5 L 0 ${r2(2.5 + scene.shadow / 2)} L ${r2(-scene.shadow)} 2.5 Z`, className: 'ia-shadow' }),
@@ -1137,6 +1138,55 @@ const EdgeView = React.memo(function EdgeView({ route, selectedId, burst, labelH
   })
 })
 
+// ── theme ──────────────────────────────────────────────────────────────────
+// The diorama has its own palette, so it needs to know whether the app is light or
+// dark. Custom properties compute to their token stream (a color-mix string), so
+// the only reliable probe is to paint one and read it back.
+function useLightTheme() {
+  const [light, setLight] = React.useState(false)
+  React.useEffect(() => {
+    if (typeof document === 'undefined' || !document.documentElement) return undefined
+    let media = null
+    const read = () => {
+      try {
+        const host = document.querySelector('.ia-root') || document.body
+        if (!host) return
+        const probe = document.createElement('span')
+        probe.setAttribute('aria-hidden', 'true')
+        probe.style.cssText =
+          'position:absolute;width:0;height:0;opacity:0;pointer-events:none;color:var(--ui-text-primary, currentColor)'
+        host.appendChild(probe)
+        const painted = getComputedStyle(probe).color
+        probe.remove()
+        const parts = String(painted).match(/[\d.]+/g)
+        if (!parts || parts.length < 3) return
+        const [r, g, b] = parts.slice(0, 3).map(Number)
+        const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+        // Dark text on a light surface means light mode, and vice versa.
+        setLight(luminance < 0.5)
+      } catch (error) {
+        /* keep the dark palette */
+      }
+    }
+    read()
+    if (typeof MutationObserver !== 'undefined') {
+      const observer = new MutationObserver(read)
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
+      if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] })
+      if (typeof window !== 'undefined' && window.matchMedia) {
+        media = window.matchMedia('(prefers-color-scheme: light)')
+        if (media.addEventListener) media.addEventListener('change', read)
+      }
+      return () => {
+        observer.disconnect()
+        if (media && media.removeEventListener) media.removeEventListener('change', read)
+      }
+    }
+    return undefined
+  }, [])
+  return light
+}
+
 // ── viewport ───────────────────────────────────────────────────────────────
 // Pan and zoom are handled imperatively: the SVG viewBox attribute is written
 // directly inside a rAF, and React state is only synced once the gesture ends.
@@ -1147,7 +1197,16 @@ const MAX_ZOOM = 3
 
 function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom, offset, setOffset, api, onInteract }) {
   const plan = React.useMemo(() => planScene(nodes), [nodes])
-  const routed = React.useMemo(() => routeEdges(edges, plan), [edges, plan])
+  // Route by topology, not by array identity: `useQuery` hands back a fresh `edges`
+  // array on every poll, and re-running A* for seventy edges mid-drag drops a frame.
+  const routeCache = React.useRef({ key: '', value: [] })
+  const routed = React.useMemo(() => {
+    const key = `${plan.signature}|${edges.map(edge => `${edge.source_id}>${edge.target_id}:${edge.relation}`).join('|')}`
+    if (routeCache.current.key === key) return routeCache.current.value
+    const value = routeEdges(edges, plan)
+    routeCache.current = { key, value }
+    return value
+  }, [edges, plan])
   const svgRef = React.useRef(null)
   const dragRef = React.useRef(null)
   const seenRef = React.useRef(null)
@@ -1162,16 +1221,24 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
     return Math.max(0.0001, Math.min(rect.width / (plan.width / z), rect.height / (plan.height / z)))
   }
 
-  const paint = React.useCallback(() => {
+  // The viewBox is written as an attribute, never as a React prop: a re-render
+  // during a drag (poll tick, hover, drawer) used to stamp the stale prop back
+  // over the live camera, which is what made panning fight itself.
+  const writeViewBox = React.useCallback(() => {
     const svg = svgRef.current
     if (!svg) return
+    const v = viewRef.current
+    svg.setAttribute('viewBox', `${r2(-v.x)} ${r2(-v.y)} ${r2(plan.width / v.z)} ${r2(plan.height / v.z)}`)
+  }, [plan.width, plan.height])
+
+  const paint = React.useCallback(() => {
+    if (!svgRef.current) return
     if (frameRef.current) cancelAnimationFrame(frameRef.current)
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = 0
-      const v = viewRef.current
-      svg.setAttribute('viewBox', `${r2(-v.x)} ${r2(-v.y)} ${r2(plan.width / v.z)} ${r2(plan.height / v.z)}`)
+      writeViewBox()
     })
-  }, [plan.width, plan.height])
+  }, [writeViewBox])
 
   const commit = React.useCallback(
     immediate => {
@@ -1219,17 +1286,32 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
     [paint, plan.width, plan.height]
   )
 
+  // A short "camera moving" flag for the wheel/double-click path, so text does not
+  // re-rasterise on every notch.
+  const zoomFlashRef = React.useRef(0)
+  const flashZooming = React.useCallback(() => {
+    const svg = svgRef.current
+    if (!svg || !svg.classList) return
+    svg.classList.add('ia-svg-zooming')
+    if (zoomFlashRef.current) clearTimeout(zoomFlashRef.current)
+    zoomFlashRef.current = setTimeout(() => {
+      zoomFlashRef.current = 0
+      if (svg.classList) svg.classList.remove('ia-svg-zooming')
+    }, 160)
+  }, [])
+
   const zoomBy = React.useCallback(
     factor => {
       const svg = svgRef.current
       if (!svg) return
       const rect = svg.getBoundingClientRect()
       if (zoomAround(viewRef.current.z * factor, rect, rect.width / 2, rect.height / 2)) {
+        flashZooming()
         commit(true)
         touched()
       }
     },
-    [commit, touched, zoomAround]
+    [commit, flashZooming, touched, zoomAround]
   )
 
   const reset = React.useCallback(() => {
@@ -1260,27 +1342,34 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
   }, [api, zoomBy, reset, fit])
 
   // Adopt viewport changes that came from outside (buttons, reset, remount).
-  React.useEffect(() => {
+  // A drag owns the camera: touching it here mid-gesture would yank the map.
+  React.useLayoutEffect(() => {
+    if (dragRef.current) return
     const v = viewRef.current
     if (Math.abs(v.z - zoom) > 1e-3 || Math.abs(v.x - offset.x) > 0.5 || Math.abs(v.y - offset.y) > 0.5) {
       viewRef.current = { x: offset.x, y: offset.y, z: zoom }
-      paint()
     }
-  }, [zoom, offset, paint])
+    writeViewBox()
+  }, [zoom, offset, writeViewBox])
 
-  React.useEffect(() => {
-    paint()
+  React.useLayoutEffect(() => {
+    writeViewBox()
     return () => {
       if (frameRef.current) cancelAnimationFrame(frameRef.current)
       if (commitRef.current) clearTimeout(commitRef.current)
     }
-  }, [paint])
+  }, [writeViewBox])
 
   // Wheel and trackpad must reach us non-passively so we can stop the page from
   // scrolling underneath the map. React attaches onWheel passively.
   React.useEffect(() => {
     const svg = svgRef.current
     if (!svg || !svg.addEventListener) return undefined
+    // Two-finger trackpad scrolling arrives as deltaMode 0 with small, fractional
+    // deltas; a mouse wheel arrives as one big notch (deltaMode 1, or |deltaY| >= 50).
+    // Treating a trackpad pan as a zoom is what made "panning around" feel wrong.
+    const isTrackpadScroll = event =>
+      event.deltaMode === 0 && Math.abs(event.deltaY) < 50 && Math.abs(event.deltaX) < 50
     const onWheel = event => {
       const v = viewRef.current
       const rect = svg.getBoundingClientRect()
@@ -1288,28 +1377,23 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
       const dy = event.deltaY * unit
       const dx = event.deltaX * unit
       const pinch = event.ctrlKey || event.metaKey
-      const horizontal = !pinch && !event.shiftKey && Math.abs(dx) > 0 && Math.abs(dx) >= Math.abs(dy)
-      if (horizontal) {
-        event.preventDefault()
-        v.x += dx * scaleFor(rect, v.z)
-        paint()
-        commit()
-        touched()
-        return
-      }
       event.preventDefault()
       const k = scaleFor(rect, v.z)
-      const px = event.clientX - rect.left
-      const py = event.clientY - rect.top
-      if (event.shiftKey && !pinch) {
-        v.y += dy * k
+      const pans = !pinch && (event.shiftKey || isTrackpadScroll(event))
+      if (pans) {
+        // Content follows the fingers: scroll down/right moves the world with it.
+        v.x += (event.shiftKey ? dy : dx) * k
+        v.y += (event.shiftKey ? 0 : dy) * k
         paint()
         commit()
         touched()
         return
       }
+      const px = event.clientX - rect.left
+      const py = event.clientY - rect.top
       // Exponential so a mouse notch and a trackpad pinch both feel linear.
       if (zoomAround(v.z * Math.exp(-dy * 0.0022), rect, px, py)) {
+        flashZooming()
         commit()
         touched()
       }
@@ -1318,50 +1402,86 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
     return () => svg.removeEventListener('wheel', onWheel)
   }, [commit, paint, touched, zoomAround])
 
-  const onPointerDown = event => {
+  // Drag callbacks live in a ref so the window listeners can be attached once.
+  const dragHandlers = React.useRef({})
+  dragHandlers.current = { commit, paint, touched, onSelect, selectedId }
+
+  const beginDrag = event => {
     if (event.button !== undefined && event.button > 0) return
     if (event.target && event.target.closest && event.target.closest('[data-node-id]')) return
     const svg = svgRef.current
     if (!svg) return
     const rect = svg.getBoundingClientRect()
+    const v = viewRef.current
     dragRef.current = {
       px: event.clientX,
       py: event.clientY,
-      x: viewRef.current.x,
-      y: viewRef.current.y,
-      k: scaleFor(rect, viewRef.current.z),
-      moved: false
+      x: v.x,
+      y: v.y,
+      z: v.z,
+      k: scaleFor(rect, v.z),
+      moved: false,
+      pointerId: event.pointerId
     }
-    svg.setPointerCapture?.(event.pointerId)
+    if (event.preventDefault) event.preventDefault()
+    try {
+      svg.setPointerCapture?.(event.pointerId)
+    } catch (error) {
+      /* capture is a nicety; the window listeners carry the drag anyway */
+    }
     if (svg.classList) svg.classList.add('ia-svg-dragging')
   }
 
-  const onPointerMove = event => {
-    const drag = dragRef.current
-    if (!drag) return
-    const dx = event.clientX - drag.px
-    const dy = event.clientY - drag.py
-    if (!drag.moved && Math.hypot(dx, dy) < 3) return
-    drag.moved = true
-    // Content follows the cursor: dragging right moves the world right.
-    viewRef.current.x = drag.x + dx * drag.k
-    viewRef.current.y = drag.y + dy * drag.k
-    paint()
-  }
-
-  const endDrag = () => {
-    const drag = dragRef.current
-    const svg = svgRef.current
-    if (svg && svg.classList) svg.classList.remove('ia-svg-dragging')
-    dragRef.current = null
-    if (!drag) return
-    if (drag.moved) {
-      commit(true)
-      touched()
-    } else if (selectedId && onSelect) {
-      onSelect(null)
+  // Window-scoped so the drag survives the pointer crossing the toolbar, the
+  // drawer or the window edge — leaving the SVG used to abort the gesture.
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || !window.addEventListener) return undefined
+    const finish = () => {
+      const drag = dragRef.current
+      const svg = svgRef.current
+      if (svg && svg.classList) svg.classList.remove('ia-svg-dragging')
+      dragRef.current = null
+      if (!drag) return
+      const { commit: commitNow, touched: touchedNow, onSelect: selectNow, selectedId: current } = dragHandlers.current
+      if (drag.moved) {
+        commitNow?.(true)
+        touchedNow?.()
+      } else if (current && selectNow) {
+        selectNow(null)
+      }
     }
-  }
+    const onMove = event => {
+      const drag = dragRef.current
+      if (!drag) return
+      if (drag.pointerId !== undefined && event.pointerId !== undefined && drag.pointerId !== event.pointerId) return
+      // A release outside the window shows up as buttons === 0 on the next move.
+      // Only trust that once the browser has actually reported a held button, so
+      // synthetic events (and browsers that omit `buttons`) still drag.
+      if (event.buttons && drag.held !== true) drag.held = true
+      if (drag.held === true && event.buttons === 0) {
+        finish()
+        return
+      }
+      const dx = event.clientX - drag.px
+      const dy = event.clientY - drag.py
+      if (!drag.moved && Math.hypot(dx, dy) < 3) return
+      drag.moved = true
+      // Content follows the cursor: dragging right moves the world right.
+      viewRef.current.x = drag.x + dx * drag.k
+      viewRef.current.y = drag.y + dy * drag.k
+      dragHandlers.current.paint?.()
+    }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    window.addEventListener('blur', finish)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+    }
+  }, [])
 
   const onDoubleClick = event => {
     if (event.target && event.target.closest && event.target.closest('[data-node-id]')) return
@@ -1370,6 +1490,7 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
     const rect = svg.getBoundingClientRect()
     const factor = event.shiftKey ? 1 / 1.7 : 1.7
     if (zoomAround(viewRef.current.z * factor, rect, event.clientX - rect.left, event.clientY - rect.top)) {
+      flashZooming()
       commit(true)
       touched()
     }
@@ -1419,13 +1540,8 @@ function Topology({ nodes, edges, selectedId, onSelect, pulseFor, zoom, setZoom,
     children: jsxs('svg', {
       className: 'ia-svg',
       ref: svgRef,
-      viewBox: `${r2(-offset.x)} ${r2(-offset.y)} ${r2(plan.width / zoom)} ${r2(plan.height / zoom)}`,
       preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown,
-      onPointerMove,
-      onPointerUp: endDrag,
-      onPointerCancel: endDrag,
-      onPointerLeave: endDrag,
+      onPointerDown: beginDrag,
       onDoubleClick,
       onContextMenu: event => event.preventDefault(),
       children: [
@@ -1605,6 +1721,7 @@ function InfraAtlasPage() {
   const [offset, setOffset] = React.useState({ x: 0, y: 0 })
   const [interacted, setInteracted] = React.useState(false)
   const mapApi = React.useRef(null)
+  const lightTheme = useLightTheme()
   const [policyOpen, setPolicyOpen] = React.useState(false)
   const [legendOpen, setLegendOpen] = React.useState(false)
   const [activityOpen, setActivityOpen] = React.useState(false)
@@ -1733,7 +1850,7 @@ function InfraAtlasPage() {
   const healMode = config.auto_heal_mode || 'auto'
 
   return jsxs('div', {
-    className: 'ia-root',
+    className: cn('ia-root', lightTheme && 'ia-light'),
     children: [
       jsx('style', { children: CSS }),
 
@@ -3005,6 +3122,26 @@ function DriftCard() {
 const CSS = `
 /* ── layout & glassmorphic surfaces ──────────────────────────────────────── */
 .ia-root {
+  /* Diorama palette. One block of knobs, flipped wholesale by .ia-light, so the
+     3-D scene follows the app theme instead of hard-coding a dark cave. */
+  --ia-void: #090d16;
+  --ia-void-glow: rgba(30, 41, 59, 0.45);
+  --ia-mat: #454c5e;
+  --ia-shade-top: #ffffff;
+  --ia-shade-side: #000000;
+  --ia-plat-0: #3d3a47;
+  --ia-plat-1: #353c50;
+  --ia-plat-2: #3b3550;
+  --ia-plat-3: #2f4744;
+  --ia-ink: #e6ebf5;
+  --ia-ink-muted: #cbd5e1;
+  --ia-halo: rgba(8, 10, 16, 0.92);
+  --ia-halo-soft: rgba(8, 10, 16, 0.75);
+  --ia-grid: rgba(190, 205, 235, 0.13);
+  --ia-plat-edge: rgba(220, 235, 255, 0.16);
+  --ia-detail: rgba(255, 255, 255, 0.14);
+  --ia-groove: rgba(0, 0, 0, 0.34);
+  --ia-shadow: rgba(3, 6, 14, 0.42);
   position: relative;
   width: 100%;
   height: 100%;
@@ -3012,8 +3149,37 @@ const CSS = `
   overflow: hidden;
   font-size: 12px;
   color: var(--ui-text-primary, #e2e8f0);
-  background: radial-gradient(ellipse at 50% 35%, rgba(30, 41, 59, 0.45) 0%, var(--ui-bg-primary, #090d16) 78%);
+  background: radial-gradient(ellipse at 50% 35%, var(--ia-void-glow) 0%, var(--ui-bg-primary, var(--ia-void)) 78%);
   user-select: none;
+}
+
+/* Light theme: paper-white ground, powder-blue terraces, graphite ink. */
+/* Edge colours are tuned for a dark ground; on white they need weight. */
+.ia-light .ia-edge-line { stroke: color-mix(in srgb, var(--edge-c, #96a0b5) 72%, #1b2432); }
+.ia-light .ia-edge-head { fill: color-mix(in srgb, var(--edge-c, #96a0b5) 72%, #1b2432); }
+.ia-light .ia-packet-halo { opacity: 0.45; }
+.ia-light .ia-chip-text { filter: brightness(0.82); }
+.ia-light .ia-plat-grid { stroke-opacity: 0.9; }
+
+.ia-root.ia-light {
+  --ia-void: #eef2f8;
+  --ia-void-glow: rgba(255, 255, 255, 0.95);
+  --ia-mat: #c8d2e2;
+  --ia-shade-top: #ffffff;
+  --ia-shade-side: #5f6b7e;
+  --ia-plat-0: #c6ccd9;
+  --ia-plat-1: #bfc8dc;
+  --ia-plat-2: #c9c5e0;
+  --ia-plat-3: #bcd4ce;
+  --ia-ink: #232b3a;
+  --ia-ink-muted: #4b5568;
+  --ia-halo: rgba(255, 255, 255, 0.94);
+  --ia-halo-soft: rgba(255, 255, 255, 0.8);
+  --ia-grid: rgba(38, 58, 96, 0.2);
+  --ia-plat-edge: rgba(38, 58, 96, 0.24);
+  --ia-detail: rgba(255, 255, 255, 0.7);
+  --ia-groove: rgba(35, 52, 86, 0.3);
+  --ia-shadow: rgba(40, 60, 100, 0.18);
 }
 
 .ia-glass {
@@ -3039,6 +3205,14 @@ const CSS = `
   -webkit-user-select: none;
 }
 .ia-svg:active, .ia-svg-dragging { cursor: grabbing; }
+/* Labels are the expensive part of a viewBox change (text re-rasterises every
+   frame). Hide them while the camera moves, exactly like a map tiles out. */
+.ia-svg-dragging .ia-node-title,
+.ia-svg-dragging .ia-node-sub2,
+.ia-svg-dragging .ia-plat-label,
+.ia-svg-zooming .ia-node-sub2,
+.ia-svg-zooming .ia-plat-label { opacity: 0; }
+.ia-svg-dragging .ia-beacon, .ia-svg-zooming .ia-beacon { animation: none; }
 .ia-map-hint {
   position: absolute;
   left: 50%;
@@ -3050,7 +3224,7 @@ const CSS = `
   font-size: 10.5px;
   letter-spacing: 0.01em;
   color: var(--ui-text-tertiary, #94a3b8);
-  background: rgba(8, 12, 22, 0.55);
+  background: color-mix(in srgb, var(--ia-void, #080c16) 72%, transparent);
   border: 1px solid rgba(148, 163, 184, 0.16);
   pointer-events: none;
   animation: ia-fade 0.4s ease 1.2s both;
@@ -3727,17 +3901,17 @@ const CSS = `
 
 /* ── isometric scene (untouched 3D diorama styling) ──────────────────────── */
 .ia-plat { animation: ia-rise 0.7s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
-.ia-plat-top { fill: color-mix(in srgb, var(--plat, #333a4a) 92%, #ffffff); }
-.ia-plat-left { fill: color-mix(in srgb, var(--plat, #333a4a) 68%, #000000); }
-.ia-plat-right { fill: color-mix(in srgb, var(--plat, #333a4a) 44%, #000000); }
-.ia-plat-0 { --plat: #3d3a47; }
-.ia-plat-1 { --plat: #353c50; }
-.ia-plat-2 { --plat: #3b3550; }
-.ia-plat-3 { --plat: #2f4744; }
-.ia-plat-riser { fill: color-mix(in srgb, var(--plat, #333a4a) 34%, #000000); }
-.ia-plat-grid { fill: none; stroke: rgba(190, 205, 235, 0.13); stroke-width: 1; }
-.ia-plat-edge { fill: none; stroke: rgba(220, 235, 255, 0.16); stroke-width: 1.1; }
-.ia-plat-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.22em; fill: rgba(235, 242, 255, 0.78); paint-order: stroke; stroke: rgba(8, 10, 16, 0.75); stroke-width: 2.2px; }
+.ia-plat-top { fill: color-mix(in srgb, var(--plat, #333a4a) 92%, var(--ia-shade-top, #ffffff)); }
+.ia-plat-left { fill: color-mix(in srgb, var(--plat, #333a4a) 68%, var(--ia-shade-side, #000000)); }
+.ia-plat-right { fill: color-mix(in srgb, var(--plat, #333a4a) 44%, var(--ia-shade-side, #000000)); }
+.ia-plat-0 { --plat: var(--ia-plat-0, #3d3a47); }
+.ia-plat-1 { --plat: var(--ia-plat-1, #353c50); }
+.ia-plat-2 { --plat: var(--ia-plat-2, #3b3550); }
+.ia-plat-3 { --plat: var(--ia-plat-3, #2f4744); }
+.ia-plat-riser { fill: color-mix(in srgb, var(--plat, #333a4a) 34%, var(--ia-shade-side, #000000)); }
+.ia-plat-grid { fill: none; stroke: var(--ia-grid, rgba(190, 205, 235, 0.13)); stroke-width: 1; }
+.ia-plat-edge { fill: none; stroke: var(--ia-plat-edge, rgba(220, 235, 255, 0.16)); stroke-width: 1.1; }
+.ia-plat-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.22em; fill: var(--ia-ink, rgba(235, 242, 255, 0.78)); paint-order: stroke; stroke: var(--ia-halo-soft, rgba(8, 10, 16, 0.75)); stroke-width: 2.2px; }
 
 .ia-edge-line { fill: none; stroke: var(--edge-c, #96a0b5); stroke-width: var(--ew, 1.4); stroke-opacity: 0.78; stroke-linecap: round; animation: ia-flow var(--flow-dur, 24s) linear infinite; }
 .ia-edge:hover .ia-edge-line { stroke-opacity: 1; stroke-width: calc(var(--ew, 1.4) + 0.9); }
@@ -3771,19 +3945,19 @@ const CSS = `
 .ia-lift { transition: transform 0.18s ease, filter 0.18s ease; }
 .ia-node:hover .ia-lift { transform: translateY(-2.5px); }
 .ia-node-active .ia-lift { transform: translateY(-5px); }
-.ia-f-top { fill: color-mix(in srgb, var(--mat, #424a5e) 84%, #ffffff); stroke: rgba(255, 255, 255, 0.09); stroke-width: 0.6; }
-.ia-f-left { fill: color-mix(in srgb, var(--mat, #424a5e) 74%, #000000); stroke: rgba(255, 255, 255, 0.05); stroke-width: 0.6; }
-.ia-f-right { fill: color-mix(in srgb, var(--mat, #424a5e) 50%, #000000); stroke: rgba(255, 255, 255, 0.04); stroke-width: 0.6; }
-.ia-f-back { fill: color-mix(in srgb, var(--mat, #424a5e) 34%, #000000); stroke: none; }
-.ia-detail { stroke: rgba(255, 255, 255, 0.14); stroke-width: 1; fill: none; }
-.ia-groove { stroke: rgba(0, 0, 0, 0.34); stroke-width: 1; fill: none; }
-.ia-shadow { fill: rgba(3, 6, 14, 0.42); }
+.ia-f-top { fill: color-mix(in srgb, var(--mat, #424a5e) 84%, var(--ia-shade-top, #ffffff)); stroke: var(--ia-detail, rgba(255, 255, 255, 0.09)); stroke-width: 0.6; }
+.ia-f-left { fill: color-mix(in srgb, var(--mat, #424a5e) 74%, var(--ia-shade-side, #000000)); stroke: var(--ia-detail, rgba(255, 255, 255, 0.05)); stroke-width: 0.6; }
+.ia-f-right { fill: color-mix(in srgb, var(--mat, #424a5e) 50%, var(--ia-shade-side, #000000)); stroke: var(--ia-detail, rgba(255, 255, 255, 0.04)); stroke-width: 0.6; }
+.ia-f-back { fill: color-mix(in srgb, var(--mat, #424a5e) 34%, var(--ia-shade-side, #000000)); stroke: none; }
+.ia-detail { stroke: var(--ia-detail, rgba(255, 255, 255, 0.14)); stroke-width: 1; fill: none; }
+.ia-groove { stroke: var(--ia-groove, rgba(0, 0, 0, 0.34)); stroke-width: 1; fill: none; }
+.ia-shadow { fill: var(--ia-shadow, rgba(3, 6, 14, 0.42)); }
 .ia-dglow { opacity: 0.26; animation: ia-glowp 3s ease-in-out infinite; }
 .ia-sel-ring { fill: color-mix(in srgb, var(--ui-accent, #38bdf8) 12%, transparent); stroke: var(--ui-accent, #38bdf8); stroke-width: 1.5; stroke-dasharray: 7 5; animation: ia-ants 1.1s linear infinite; }
-.ia-node-title { font-size: 10px; font-weight: 600; fill: var(--ui-text-primary, currentColor); paint-order: stroke; stroke: rgba(8, 10, 16, 0.92); stroke-width: 3.4px; stroke-linejoin: round; transition: opacity 0.15s ease; }
+.ia-node-title { font-size: 10px; font-weight: 600; fill: var(--ui-text-primary, var(--ia-ink, currentColor)); paint-order: stroke; stroke: var(--ia-halo, rgba(8, 10, 16, 0.92)); stroke-width: 3.4px; stroke-linejoin: round; transition: opacity 0.15s ease; }
 .ia-node-compact .ia-node-title { opacity: 0; pointer-events: none; }
 .ia-node-compact:hover .ia-node-title { opacity: 1; }
-.ia-node-sub2 { font-size: 8.5px; fill: #cbd5e1; paint-order: stroke; stroke: rgba(8, 10, 16, 0.92); stroke-width: 3px; stroke-linejoin: round; }
+.ia-node-sub2 { font-size: 8.5px; fill: var(--ia-ink-muted, #cbd5e1); paint-order: stroke; stroke: var(--ia-halo, rgba(8, 10, 16, 0.92)); stroke-width: 3px; stroke-linejoin: round; }
 .ia-chipf { animation: ia-chipf 3.2s ease-in-out infinite; }
 .ia-chip-box { fill: rgba(10, 12, 18, 0.82); stroke-width: 1; }
 .ia-chip-text { font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -3794,14 +3968,14 @@ const CSS = `
 .ia-led-f { animation: ia-led-f 1.1s steps(2, jump-none) infinite; }
 .ia-screen { fill: #0b1120; fill-opacity: 0.92; stroke-width: 1; stroke-opacity: 0.75; }
 .ia-scan { stroke: rgba(190, 210, 255, 0.85); stroke-width: 1.6; animation: ia-scan 2.8s linear infinite; }
-.ia-glass { fill: color-mix(in srgb, var(--mat, #4c5262) 34%, #0e1420); }
-path.ia-glass { stroke: rgba(255, 255, 255, 0.16); stroke-width: 1; }
+.ia-glass { fill: color-mix(in srgb, var(--mat, #4c5262) 34%, var(--ia-void, #0e1420)); }
+path.ia-glass { stroke: var(--ia-detail, rgba(255, 255, 255, 0.16)); stroke-width: 1; }
 .ia-liquid { opacity: 0.82; }
 .ia-meniscus { opacity: 0.55; animation: ia-meniscus 3s ease-in-out infinite; }
-.ia-rim { fill: color-mix(in srgb, var(--mat, #4c5262) 20%, #0e1420); stroke-width: 1.6; }
+.ia-rim { fill: color-mix(in srgb, var(--mat, #4c5262) 20%, var(--ia-void, #0e1420)); stroke-width: 1.6; }
 .ia-glass-shine { fill: rgba(255, 255, 255, 0.12); }
 .ia-hum { transform-box: fill-box; transform-origin: center; animation: ia-hum 2.6s ease-in-out infinite; }
-.ia-door { fill: color-mix(in srgb, var(--acc, #22c1d6) 38%, #0e1420); stroke-width: 1.4; fill-opacity: 0.95; }
+.ia-door { fill: color-mix(in srgb, var(--acc, #22c1d6) 38%, var(--ia-void, #0e1420)); stroke-width: 1.4; fill-opacity: 0.95; }
 .ia-glyph { fill: none; stroke-width: 1.3; }
 .ia-visor { stroke-width: 2.8; stroke-linecap: round; opacity: 0.98; }
 .ia-bob { animation: ia-bob 3.4s ease-in-out infinite; }

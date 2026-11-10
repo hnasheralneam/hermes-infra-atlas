@@ -20,6 +20,20 @@ if [[ ! -d "$HERMES_AGENT/agent" ]]; then
   exit 2
 fi
 MODULES="${ATLAS_NODE_MODULES:-$HERMES_AGENT/node_modules}"
+# `python3` on PATH may be a Hermes venv without the test deps; find one with pytest.
+PYTHON="${ATLAS_PYTHON:-}"
+if [[ -z "$PYTHON" ]]; then
+  for candidate in python3 /usr/bin/python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "import pytest" >/dev/null 2>&1; then
+      PYTHON="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$PYTHON" ]]; then
+  echo "check: no python3 with pytest — set ATLAS_PYTHON=/path/to/python3" >&2
+  exit 2
+fi
 if [[ ! -d "$MODULES/react" ]]; then
   echo "check: $MODULES has no react — set ATLAS_NODE_MODULES to a tree with react/react-dom" >&2
   exit 2
@@ -28,7 +42,7 @@ fi
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
 step "python: compile every module"
-python3 -m compileall -q atlas_tools.py config.py fusion.py hooks.py matcher.py registry_kb.py \
+"$PYTHON" -m compileall -q atlas_tools.py config.py fusion.py hooks.py matcher.py registry_kb.py \
   schemas.py store.py uptime.py collectors dashboard
 echo ok
 
@@ -46,10 +60,10 @@ step "manifest: hermes plugins validate"
 hermes plugins validate . >/dev/null && echo ok
 
 step "python: pytest"
-PYTHONPATH="$HERMES_AGENT" python3 -m pytest -q
+PYTHONPATH="$HERMES_AGENT" "$PYTHON" -m pytest -q
 
 step "python: coverage (floor 75%)"
-PYTHONPATH="$HERMES_AGENT" python3 -m coverage run --source=. --omit='tests/*,tools/*,desktop/*' -m pytest -q >/dev/null
-python3 -m coverage report --fail-under=75 | tail -1
+PYTHONPATH="$HERMES_AGENT" "$PYTHON" -m coverage run --source=. --omit='tests/*,tools/*,desktop/*' -m pytest -q >/dev/null
+"$PYTHON" -m coverage report --fail-under=75 | tail -1
 
 printf '\n\033[1;32mall gates passed\033[0m\n'

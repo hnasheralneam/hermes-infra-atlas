@@ -220,11 +220,17 @@ The page around it stays deliberately sparse:
   symmetric secondary row (`Unlock Chat`, `Ask Hermes`), and three tabs — `Overview`
   (pitfalls callout, field-by-field diff, properties, clickable blast radius), `Uptime`
   (24h %, latency sparkline, probe target, incident history with inline resolve), `Runbook`.
-- **Direct manipulation**: drag to pan (content follows the cursor), scroll or pinch to zoom
-  around the pointer, double-click to zoom in (shift double-click out), and the `− 100% +`
-  cluster resets or steps. Gestures are handled imperatively — the viewBox is written in a
+- **Direct manipulation**: drag to pan (content follows the cursor), a mouse-wheel notch or
+  trackpad pinch zooms around the pointer, two-finger trackpad scrolling pans, double-click
+  zooms in (shift double-click out), and the `− 100% +` cluster resets or steps. The camera is
+  owned imperatively — a drag survives the pointer crossing the toolbar, the drawer or the
+  window edge, and labels freeze while it moves so the scene keeps its frame rate. Gestures are handled imperatively — the viewBox is written in a
   rAF and React state only syncs when the gesture ends — so a hundred-node fleet pans at
   frame rate instead of re-rendering the whole tree per pointermove.
+- **Both themes.** The diorama carries its own palette (ground, terraces, node bodies, ink,
+  label halos, edge weights) and flips it when the app is in light mode: paper-white ground,
+  powder-blue terraces, graphite labels, darkened edge strokes. Detection reads the app's own
+  text colour by painting a swatch and measuring it, so a theme switch is picked up live.
 - **Decoration is data.** Past ~44 nodes the canvas goes lean: perpetual LED/scan/packet
   animation is kept only for the selected node, nodes with incidents and their edges, and
   everything else holds still (and `prefers-reduced-motion` wins everywhere).

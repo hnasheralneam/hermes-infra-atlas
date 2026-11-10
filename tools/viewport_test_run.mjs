@@ -22,6 +22,8 @@ globalThis.MouseEvent = window.MouseEvent
 globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window)
 globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window)
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+// the theme probe paints a swatch and reads it back; jsdom provides the API on window
+globalThis.getComputedStyle = (...args) => window.getComputedStyle(...args)
 // jsdom has no layout: every measurement the canvas takes is stubbed to 1000x600.
 window.Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
   return { ...RECT, toJSON: () => RECT }
@@ -150,8 +152,8 @@ await React.act(async () => {
 const level = box()
 
 // ── drag to pan ────────────────────────────────────────────────────────────
-await fire(svg, new window.MouseEvent('pointerdown', { clientX: 400, clientY: 300, bubbles: true, cancelable: true, button: 0 }))
-await fire(svg, new window.MouseEvent('pointermove', { clientX: 500, clientY: 300, bubbles: true, cancelable: true, button: 0 }))
+await fire(svg, new window.MouseEvent('pointerdown', { clientX: 400, clientY: 300, bubbles: true, cancelable: true, button: 0, buttons: 1 }))
+await fire(svg, new window.MouseEvent('pointermove', { clientX: 500, clientY: 300, bubbles: true, cancelable: true, button: 0, buttons: 1 }))
 const panned = box()
 const expectedShift = 100 * level.scale
 check(
@@ -161,20 +163,75 @@ check(
 )
 check('horizontal drag leaves vertical pan alone', Math.abs(panned.y - level.y) < 0.5, `${level.y} → ${panned.y}`)
 
-await fire(svg, new window.MouseEvent('pointermove', { clientX: 400, clientY: 360, bubbles: true, cancelable: true, button: 0 }))
+await fire(svg, new window.MouseEvent('pointermove', { clientX: 400, clientY: 360, bubbles: true, cancelable: true, button: 0, buttons: 1 }))
 const pannedDown = box()
 check(
   'dragging down moves the content down',
   Math.abs(level.y - pannedDown.y - 60 * level.scale) < 1.5,
   `minY ${level.y.toFixed(1)} → ${pannedDown.y.toFixed(1)}`
 )
-await fire(svg, new window.MouseEvent('pointerup', { clientX: 400, clientY: 360, bubbles: true, cancelable: true, button: 0 }))
+await fire(svg, new window.MouseEvent('pointerup', { clientX: 400, clientY: 360, bubbles: true, cancelable: true, button: 0, buttons: 0 }))
+
+// ── camera survives re-renders ─────────────────────────────────────────────
+await fire(svg, new window.MouseEvent('pointerdown', { clientX: 400, clientY: 300, bubbles: true, cancelable: true, button: 0, buttons: 1 }))
+await fire(svg, new window.MouseEvent('pointermove', { clientX: 460, clientY: 300, bubbles: true, cancelable: true, button: 0, buttons: 1 }))
+const midDrag = box().x
+const allSegment = Array.from(window.document.querySelectorAll('.ia-seg-btn')).find(button => /^All/i.test(button.textContent || ''))
+if (allSegment) {
+  await React.act(async () => {
+    allSegment.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setTimeout(resolve, 80))
+  })
+}
+check(
+  'a re-render mid-drag does not move the camera',
+  Math.abs(box().x - midDrag) < 0.5,
+  `minX ${midDrag.toFixed(1)} → ${box().x.toFixed(1)}`
+)
+await fire(svg, new window.MouseEvent('pointerup', { clientX: 460, clientY: 300, bubbles: true, cancelable: true, button: 0, buttons: 0 }))
+
+// ── light theme ────────────────────────────────────────────────────────────
+const lightHost = window.document.createElement('div')
+window.document.body.appendChild(lightHost)
+const realGetComputedStyle = globalThis.getComputedStyle
+// dark text on a light surface = the app is in light mode
+globalThis.getComputedStyle = () => ({ color: 'rgb(24, 28, 38)' })
+const lightRoot = createRoot(lightHost)
+await React.act(async () => {
+  lightRoot.render(page.render({}))
+  await new Promise(resolve => setTimeout(resolve, 80))
+})
+const lightEl = lightHost.querySelector('.ia-root')
+check('light theme switches the diorama palette', Boolean(lightEl && lightEl.classList.contains('ia-light')), lightEl ? lightEl.className : 'no root')
+await React.act(async () => {
+  lightRoot.unmount()
+})
+lightHost.remove()
+globalThis.getComputedStyle = realGetComputedStyle
 
 // ── double-click zoom ──────────────────────────────────────────────────────
 const preDouble = box()
 await fire(svg, new window.MouseEvent('dblclick', { clientX: 500, clientY: 300, bubbles: true, cancelable: true }))
 const postDouble = box()
 check('double-click zooms in', postDouble.w < preDouble.w - 1, `${preDouble.w.toFixed(1)} → ${postDouble.w.toFixed(1)}`)
+
+// ── two-finger scroll pans, wheel zooms ────────────────────────────────────
+const resetView = Array.from(window.document.querySelectorAll('.ia-map-btn')).find(button => /%$/.test(button.textContent || ''))
+await React.act(async () => {
+  resetView.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setTimeout(resolve, 120))
+})
+const beforeTrackpad = box()
+await fire(svg, new window.WheelEvent('wheel', { deltaY: 18, deltaX: 12, deltaMode: 0, clientX: 500, clientY: 300, bubbles: true, cancelable: true }))
+const afterTrackpad = box()
+check('a trackpad scroll pans instead of zooming',
+  Math.abs(afterTrackpad.w - beforeTrackpad.w) < 0.5 && Math.abs(afterTrackpad.x - beforeTrackpad.x) > 1,
+  `w ${beforeTrackpad.w.toFixed(1)}→${afterTrackpad.w.toFixed(1)}, minX ${beforeTrackpad.x.toFixed(1)}→${afterTrackpad.x.toFixed(1)}`)
+
+const beforeNotch = box()
+await fire(svg, new window.WheelEvent('wheel', { deltaY: -120, deltaMode: 1, clientX: 500, clientY: 300, bubbles: true, cancelable: true }))
+const afterNotch = box()
+check('a mouse-wheel notch still zooms', afterNotch.w < beforeNotch.w - 1, `w ${beforeNotch.w.toFixed(1)}→${afterNotch.w.toFixed(1)}`)
 
 // ── drawer ─────────────────────────────────────────────────────────────────
 const nodeEl = window.document.querySelector('[data-node-id="lxc-202-cache"]')
