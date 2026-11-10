@@ -21,6 +21,41 @@ TOUCH_VERBS = (
 )
 READ_COMMANDS = ("cat ", "less ", "tail ", "head ", "grep ", "ls ", "stat ", "systemctl status", "systemctl show")
 
+# Inspection is not a mutation. `systemctl`, `docker` and `curl` are touch verbs
+# because they *can* change things; blocking `systemctl cat`, `docker ps` or a GET
+# turns the guardrail into an obstacle and teaches people to route around it.
+_READ_ONLY_RES = (
+    re.compile(r"\bsystemctl\s+(?:--\S+\s+)*(?:status|show|cat|is-active|is-enabled|is-failed|list-units|list-timers|list-sockets|list-dependencies|list-jobs|help)\b"),
+    re.compile(r"\bjournalctl\b"),
+    re.compile(r"\bdocker\s+(?:ps|logs|inspect|images|stats|top|version|info|port|diff|history|events)\b"),
+    re.compile(r"\bpodman\s+(?:ps|logs|inspect|images|stats|top|version|info|port|diff|history)\b"),
+    re.compile(r"\b(?:qm|pct)\s+(?:list|status|config|pending|cloudinit|agent)\b"),
+    re.compile(r"\bpvesh\s+(?:get|ls)\b"),
+    re.compile(r"\btailscale\s+(?:status|ping|netcheck|ip|version|whois|metrics)\b"),
+    re.compile(r"\bheadscale\s+(?:nodes|users|preauthkeys|apikeys)\s+(?:list|ls|show)\b"),
+    re.compile(r"\b(?:ufw|nft)\s+(?:status|list)\b"),
+    re.compile(r"\biptables\s+-[LS]\b"),
+    re.compile(r"\bip\s+(?:addr|a|route|r|link|neigh|rule)\b"),
+)
+_MUTATING_FLAGS = re.compile(r"(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--request\s+(?:POST|PUT|PATCH|DELETE)|(?:^|\s)(?:-d|--data\S*|-F|--form|-T|--upload-file)(?:\s|=))", re.I)
+_MUTATING_SYSTEMCTL = (
+    "systemctl restart", "systemctl start", "systemctl stop", "systemctl reload",
+    "systemctl enable", "systemctl disable", "systemctl mask", "systemctl unmask",
+    "systemctl daemon-reload", "systemctl kill", "systemctl isolate",
+)
+
+
+def is_read_only(command: str) -> bool:
+    """True when the command only inspects state (no unlock, no block)."""
+    text = str(command or "")
+    if not text.strip():
+        return False
+    if any(marker in text for marker in _MUTATING_SYSTEMCTL):
+        return False
+    if re.search(r"\b(?:curl|wget)\b", text):
+        return not bool(_MUTATING_FLAGS.search(text))
+    return any(pattern.search(text) for pattern in _READ_ONLY_RES)
+
 _VMID_CMD_RE = re.compile(r"\b(?:qm|pct)\s+\w+(?:\s+\w+)?\s+(\d{3,4})\b")
 _WORD_RE = re.compile(r"[A-Za-z0-9_.:@/-]{2,}")
 
@@ -286,6 +321,10 @@ def classify(store, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     if tool_name == "terminal":
         command = str(args.get("command") or "")
         if not command:
+            return {"role": "none", "nodes": []}
+        if is_read_only(command):
+            # Status, logs, container lists and plain GETs are inspection: they
+            # neither need the runbook nor unlock it.
             return {"role": "none", "nodes": []}
         words = _command_words(command)
         verb_hit = any(

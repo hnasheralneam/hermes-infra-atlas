@@ -281,7 +281,8 @@ def test_a_service_port_touch_only_needs_that_service_read(plugin_home, registry
     )
     matcher.refresh()
 
-    command = {"command": "curl -s -m2 http://10.0.0.143:8090/x"}
+    # a mutating request: a plain GET is inspection and must stay allowed
+    command = {"command": "curl -s -m2 -X POST http://10.0.0.143:8090/x"}
     assert [n["id"] for n in matcher.required_nodes(store, command["command"])] == ["svc-app"]
     assert hooks.on_pre_tool_call(tool_name="terminal", args=command, session_id="s-p1")["action"] == "block"
 
@@ -350,3 +351,46 @@ def test_an_unrelated_command_names_nothing(plugin_home, registry):
         session_id="s-unrelated",
     )
     assert verdict is None
+
+
+def test_inspection_commands_are_allowed_and_do_not_unlock(plugin_home, registry):
+    """`systemctl cat`, `docker ps` and a plain GET must never be blocked (or unlock)."""
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    hooks = H.submodule("hooks")
+    store.upsert_node(
+        {"id": "svc-litellm", "kind": "service", "label": "LiteLLM", "host_ip": "10.0.0.212",
+         "ports": ["4000"], "systemd_unit": "litellm.service", "managed_by": "systemd-user",
+         "registry_path": "services/litellm.md"}
+    )
+    H.submodule("matcher").refresh()
+
+    for command in (
+        "systemctl cat litellm.service",
+        "systemctl show litellm.service --property=ActiveState",
+        "journalctl -u litellm.service -n 40",
+        "docker ps --filter name=litellm",
+        "curl -s http://10.0.0.212:4000/health",
+    ):
+        assert hooks.on_pre_tool_call(tool_name="terminal", args={"command": command}, session_id="s-inspect") is None, command
+
+    assert store.has_session_read("s-inspect", "svc-litellm") is False
+
+
+def test_a_mutating_request_is_still_gated(plugin_home, registry):
+    H.load_plugin()
+    H.configure({"guardrail_mode": "block", "registry_path": str(registry)})
+    store = H.submodule("store").get_store()
+    hooks = H.submodule("hooks")
+    store.upsert_node(
+        {"id": "svc-litellm", "kind": "service", "label": "LiteLLM", "host_ip": "10.0.0.212",
+         "ports": ["4000"], "managed_by": "systemd-user", "registry_path": "services/litellm.md"}
+    )
+    H.submodule("matcher").refresh()
+    verdict = hooks.on_pre_tool_call(
+        tool_name="terminal",
+        args={"command": "curl -X POST http://10.0.0.212:4000/admin/restart"},
+        session_id="s-mutate",
+    )
+    assert verdict and verdict["action"] == "block"

@@ -118,8 +118,11 @@ credentials (secrets go to `.env` through Hermes and are read with `agent.secret
 - **Runs commands** only for `recovery_cmd`, only on this host, only for an allow-listed
   prefix (`systemctl …`, `service …`, `docker compose …`, `podman …`, `pct …`, `qm …`),
   with a cooldown and an attempt budget.
-- **Blocks** tool calls while the guardrail is in `block` mode; set it to `warn` or `off`
-  to disable.
+- **Blocks** mutating tool calls while the guardrail is in `block` mode; set it to `warn` or
+  `off` to disable. Inspection is never blocked and never unlocks: `systemctl status|cat|show`,
+  `journalctl`, `docker ps|logs|inspect`, `qm list`, `pvesh get`, `ip addr`, a plain `curl`/`wget`
+  GET. A `-X POST`/`-d`/`--data` request, or any `systemctl start|stop|restart|reload|enable`,
+  still requires the entry to have been read.
 
 No telemetry, no network calls to anything not configured above.
 
