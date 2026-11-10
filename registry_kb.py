@@ -196,7 +196,8 @@ def dump_scalar(value: Any) -> str:
 FRONTMATTER_ORDER = (
     "id", "kind", "label", "parent_id", "host_ip", "tailnet_ip", "vmid", "ports",
     "managed_by", "systemd_unit", "project_path", "probe", "recovery_cmd",
-    "auto_heal_policy", "depends_on", "status", "aliases", "pitfalls", "verified_at",
+    "auto_heal_policy", "depends_on", "status", "aliases", "credentials", "pitfalls",
+    "verified_at",
 )
 
 
@@ -387,6 +388,9 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
     depends_on = meta.get("depends_on") or []
     if isinstance(depends_on, str):
         depends_on = [d.strip() for d in depends_on.split(",") if d.strip()]
+    credentials = meta.get("credentials") or []
+    if isinstance(credentials, str):
+        credentials = [c.strip() for c in credentials.split(",") if c.strip()]
 
     guest_vmids: list[int] = []
     if kind == "server":
@@ -446,6 +450,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
         "probe_inferred": bool(probe) and not probe_explicit,
         "depends_on": [str(d) for d in depends_on],
         "aliases": [str(a) for a in aliases],
+        "credentials": [str(c) for c in credentials],
         "guest_vmids": guest_vmids,
         "doc_status": status,
         "drift_status": "doc_only" if kind == "project" else "stale",
@@ -464,6 +469,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
             "recovery_cmd": recovery_cmd,
             "auto_heal_policy": heal_policy,
             "probe": probe,
+            "credentials": [str(c) for c in credentials],
             "frontmatter": bool(_raw),
         },
     }
@@ -663,6 +669,7 @@ def upsert_entry(
         ("recovery_cmd", "recovery_cmd"),
         ("auto_heal_policy", "auto_heal_policy"),
         ("depends_on", "depends_on"),
+        ("credentials", "credentials"),
         ("pitfalls", "pitfalls"),
     ):
         value = node.get(source_key)

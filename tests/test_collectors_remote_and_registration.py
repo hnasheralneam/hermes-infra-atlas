@@ -222,7 +222,11 @@ def test_register_wires_every_surface(plugin_home):
     ctx = H.FakeCtx()
     module.register(ctx)
 
-    assert set(ctx.tools) == {"infra_query", "infra_sweep", "infra_diff", "infra_upsert", "infra_bootstrap", "infra_incidents"}
+    assert set(ctx.tools) == {
+        "infra_query", "infra_sweep", "infra_diff", "infra_upsert",
+        "infra_bootstrap", "infra_incidents", "infra_credentials",
+    }
+
     for name, tool in ctx.tools.items():
         assert tool["schema"]["name"] == name
         assert callable(tool["handler"])

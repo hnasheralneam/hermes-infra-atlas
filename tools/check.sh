@@ -42,7 +42,7 @@ fi
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
 step "python: compile every module"
-"$PYTHON" -m compileall -q atlas_tools.py config.py fusion.py hooks.py matcher.py registry_kb.py \
+"$PYTHON" -m compileall -q atlas_tools.py config.py credentials.py fusion.py hooks.py matcher.py registry_kb.py \
   schemas.py store.py uptime.py collectors dashboard
 echo ok
 

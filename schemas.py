@@ -168,6 +168,58 @@ INFRA_INCIDENTS = {
     },
 }
 
+INFRA_CREDENTIALS = {
+    "name": "infra_credentials",
+    "description": (
+        "Private credential vault for the infrastructure knowledge base. Registry entries reference "
+        "credentials by name (`credentials: [name]`) and the value lives in a 0600 vault outside the "
+        "registry, encrypted at rest when cryptography is present — never in the Markdown, which is "
+        "mirrored and committed. Actions: 'list' (names, owning node, stored/missing — no values), "
+        "'get' (the one value, requires the node's entry to be read first when node_id is given), "
+        "'set' (store or rotate a value; optionally link it into the entry's frontmatter), "
+        "'remove' (delete a value), 'scan' (find credential literals still sitting in the KB)."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "get", "set", "remove", "scan"],
+                "default": "list",
+                "description": "list | get a value | set/rotate a value | remove a value | scan the KB for literals.",
+            },
+            "name": {
+                "type": "string",
+                "description": "Credential name, e.g. 'cyberfield-root-ssh'. Lowercase letters, digits, dot, dash, underscore.",
+            },
+            "value": {
+                "type": "string",
+                "description": "set only: the secret itself. It is written to the vault and never echoed back.",
+            },
+            "node_id": {
+                "type": "string",
+                "description": "Node that owns the credential. On 'get' this enforces the read-before-touch gate; on 'set' it records ownership.",
+            },
+            "kind": {
+                "type": "string",
+                "description": "Free-form class: password, ssh-password, api-token, pve-api-token, ldap-password, oidc-client-secret, generic.",
+            },
+            "notes": {"type": "string", "description": "Where it is valid, how to rotate it. Never put the value here."},
+            "reason": {"type": "string", "description": "set/remove: why (written to the activity log)."},
+            "rotate": {
+                "type": "boolean",
+                "default": False,
+                "description": "set only: replace an existing credential's value instead of refusing.",
+            },
+            "link_node": {
+                "type": "boolean",
+                "default": True,
+                "description": "set with node_id: add the name to that entry's `credentials:` frontmatter so the KB knows it exists.",
+            },
+        },
+    },
+}
+
 ALL = {
     "infra_query": INFRA_QUERY,
     "infra_sweep": INFRA_SWEEP,
@@ -175,4 +227,5 @@ ALL = {
     "infra_upsert": INFRA_UPSERT,
     "infra_bootstrap": INFRA_BOOTSTRAP,
     "infra_incidents": INFRA_INCIDENTS,
+    "infra_credentials": INFRA_CREDENTIALS,
 }

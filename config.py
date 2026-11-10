@@ -25,6 +25,8 @@ PLUGIN_ID = "infra-atlas"
 
 DEFAULTS: dict[str, Any] = {
     "registry_path": "~/.hermes/infra-registry",
+    "credentials_path": "~/.hermes/plugin-data/infra-atlas/credentials.json",
+    "credentials_key_path": "~/.hermes/plugin-data/infra-atlas/credentials.key",
     "guardrail_mode": "block",
     "auto_heal_mode": "auto",
     "failure_threshold": 2,

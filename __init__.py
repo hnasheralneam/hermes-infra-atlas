@@ -49,6 +49,7 @@ def _register_tools(ctx) -> None:
         "infra_upsert": tools.infra_upsert,
         "infra_bootstrap": tools.infra_bootstrap,
         "infra_incidents": tools.infra_incidents,
+        "infra_credentials": tools.infra_credentials,
     }
     for name, handler in handlers.items():
         ctx.register_tool(

@@ -50,12 +50,17 @@ def submodule(name: str):
 def configure(settings: Optional[dict[str, Any]] = None, registry: Optional[Path] = None) -> None:
     """Point the plugin at a temp registry and a fixed settings table."""
     settings = dict(settings or {})
+    config = submodule("config")
     if registry is not None:
         settings.setdefault("registry_path", str(registry))
+    else:
+        # Preserve the registry this test suite is already pointed at (conftest's
+        # autouse temp KB) — dropping the key would silently fall back to the
+        # operator's live registry and let a test write into it.
+        settings.setdefault("registry_path", str(config.registry_root()))
     settings.setdefault("enable_local_collector", False)
     settings.setdefault("enable_hermes_collector", False)
     settings.setdefault("enable_probes", False)
-    config = submodule("config")
     config.configure(lambda key, default=None: settings.get(key, default))
 
 

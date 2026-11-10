@@ -52,7 +52,37 @@ Useful fields: `probe` (http URL or `tcp://host:port` for uptime),
 `auto_heal_policy` (`auto` | `playbook_only` | `notify_only` | `off`), and
 `pitfalls` (surfaced to the guardrail and to the outage responder).
 
-## 4. Outages
+## 4. Credentials live in the vault, never in the registry
+
+The registry is documentation: agents read it, it is mirrored to Nextcloud every
+30 minutes and it is in git. A credential in a runbook is a leak waiting for a
+backup.
+
+- An entry **references** a credential by name in frontmatter:
+  `credentials: [cyberfield-pve-token, cyberfield-root-ssh]`.
+- The value lives in the private vault (`~/.hermes/plugin-data/infra-atlas/credentials.json`,
+  0600, Fernet-encrypted with a 0600 key beside it) through
+  `infra_credentials`:
+
+```
+infra_credentials(action="list")                 # names, owners, stored/missing — no values
+infra_credentials(action="get", name="…")        # the one value; read the entry first
+infra_credentials(action="set", name="…", value=…, node_id="…", kind="ssh-password", reason="…")
+infra_credentials(action="remove", name="…", reason="…")
+infra_credentials(action="scan")                 # literals still sitting in the KB
+```
+
+Rules:
+
+- Never paste a value into a registry entry, a skill, a commit or a chat log.
+  When you find one (`action="scan"`), store it, add the `credentials:` reference,
+  then delete the literal from the prose.
+- `action="get"` obeys the same read-before-touch gate: read the entry first.
+- `set` requires `reason` (written to the activity ledger and `change-log.md`)
+  and never echoes the value back.
+- Rotation is a vault write plus `rotate=true`; nothing else in the KB changes.
+
+## 5. Outages
 
 - `infra_incidents(action="list")` — open incidents + 24h fleet uptime.
 - `infra_incidents(action="get", incident_id=N)` — the remediation brief.
@@ -68,7 +98,7 @@ When the watchdog wakes you, its brief already names the node, the failed probe,
 the parent host's state, the managed-by rule and the pitfalls. Follow it:
 `infra_query` → diagnose → remediate → `infra_sweep` to verify → `resolve`.
 
-## 5. Chat directives (Hermes Desktop)
+## 6. Chat directives (Hermes Desktop)
 
 Emit these alone on their own line to render live cards in the transcript:
 

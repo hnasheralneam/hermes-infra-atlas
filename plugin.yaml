@@ -12,6 +12,7 @@ provides_tools:
   - infra_upsert
   - infra_bootstrap
   - infra_incidents
+  - infra_credentials
 
 provides_hooks:
   - pre_tool_call
@@ -24,6 +25,16 @@ config_schema:
     default: "~/.hermes/infra-registry"
     label: "Registry directory"
     description: "Markdown infrastructure knowledge base (servers/, services/, projects/, INDEX.md, change-log.md)."
+  credentials_path:
+    type: str
+    default: "~/.hermes/plugin-data/infra-atlas/credentials.json"
+    label: "Credential vault (outside the registry)"
+    description: "Private 0600 JSON store for credential values referenced by `credentials:` in registry entries. Keep it out of the registry — that tree is mirrored to Nextcloud and committed."
+  credentials_key_path:
+    type: str
+    default: "~/.hermes/plugin-data/infra-atlas/credentials.key"
+    label: "Credential vault encryption key"
+    description: "0600 Fernet key generated on first write. When `cryptography` is unavailable the vault stores plaintext and records encrypted=false."
   guardrail_mode:
     type: str
     choices: [block, warn, off]

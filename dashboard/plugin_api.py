@@ -102,6 +102,34 @@ async def health() -> dict[str, Any]:
     }
 
 
+@router.get("/credentials")
+async def credentials() -> dict[str, Any]:
+    """Names, owners and stored/missing status — never a value."""
+    vault = _plugin_module("credentials")
+    config = _config()
+    root = config.registry_root()
+    entries = vault.list_entries()
+    declared = vault.declared_refs(root)
+    owners: dict[str, list[str]] = {}
+    for node_id, names in declared.items():
+        for name in names:
+            owners.setdefault(name, []).append(node_id)
+    for entry in entries:
+        entry["declared_by"] = sorted(set(owners.get(entry["name"], [])))
+    scan = vault.scan_report(root)
+    return _json(
+        {
+            "vault": vault.store_info(),
+            "credentials": entries,
+            "count": len(entries),
+            "missing": vault.missing(),
+            "unreferenced": vault.unreferenced(),
+            "literal_findings": {"count": scan["count"], "files": scan["files"]},
+            "writes": "agent-side only: infra_credentials(action='set'|'remove')",
+        }
+    )
+
+
 @router.get("/graph")
 async def graph() -> dict[str, Any]:
     store = _store()

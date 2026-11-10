@@ -66,6 +66,23 @@ def _reset_hermes_home_cache() -> None:
         pass
 
 
+@pytest.fixture(autouse=True)
+def isolated_registry(tmp_path):
+    """No test may write into the operator's real registry.
+
+    Incident resolve/escalate and ``infra_upsert`` write to
+    ``config.registry_root()``; without this baseline a test that never calls
+    ``H.configure`` inherits the live KB and pollutes its change-log.
+    """
+    root = tmp_path / "autoreg"
+    for folder in ("servers", "services", "projects"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / "INDEX.md").write_text("# Infrastructure index\n", encoding="utf-8")
+    (root / "change-log.md").write_text("# Infrastructure change log\n", encoding="utf-8")
+    H.configure({"registry_path": str(root)})
+    yield root
+
+
 @pytest.fixture()
 def plugin_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes-home"

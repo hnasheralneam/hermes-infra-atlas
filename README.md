@@ -98,15 +98,49 @@ the moment they matter.
 | `infra_upsert` | Create/update/adopt/remove a registry entry, with change-log. |
 | `infra_bootstrap` | Annotate an existing KB, or scaffold one from live discovery. |
 | `infra_incidents` | List/get/heal/resolve/escalate incidents; install the zero-token watchdog. |
+| `infra_credentials` | Private credential vault: list, get (gated), set/rotate, remove, and scan the KB for literals. |
 
 Bundled skill: `infra-atlas:infra-atlas` (loaded automatically when the plugin is enabled).
 
 ## Settings
 
-`registry_path`, `guardrail_mode` (`block`/`warn`/`off`), `auto_heal_mode`
+`registry_path`, `credentials_path` / `credentials_key_path` (see below),
+`guardrail_mode` (`block`/`warn`/`off`), `auto_heal_mode`
 (`auto`/`playbook_only`/`notify_only`/`off`), `failure_threshold`, `heal_cooldown_sec`,
 the three zero-config collectors, and the opt-in Proxmox/Headscale
 credentials (secrets go to `.env` through Hermes and are read with `agent.secret_scope`).
+
+## Credentials never live in the registry
+
+The registry is documentation — it is read by agents, mirrored to Nextcloud and
+committed to git, so a password in a runbook is a leak in triplicate. Entries
+reference credentials by name:
+
+```markdown
+---
+id: srv-cyberfield
+kind: server
+credentials: [cyberfield-pve-token, cyberfield-root-ssh]
+---
+```
+
+The value lives in a private vault under `$HERMES_HOME/plugin-data/infra-atlas/`
+(settings `credentials_path` / `credentials_key_path`), written through
+`infra_credentials`:
+
+- the file is `0600` in a `0700` directory and **Fernet-encrypted** with a `0600`
+  key when `cryptography` is installed; without it the vault records
+  `encrypted: false` rather than pretending,
+- `action="list"` returns names, owners and stored/missing status — never values,
+- `action="get"` returns one value, records the read in the activity ledger, and
+  refuses unless the node's registry entry was read first,
+- `action="set"` / `"remove"` require a `reason`, write `change-log.md`, and never
+  echo the value back,
+- `action="scan"` finds credential literals still sitting in the Markdown (masked
+  previews only) so they can be migrated into the vault.
+
+The dashboard exposes `GET /api/plugins/infra-atlas/credentials` (masked list).
+Writes are agent-side only — the vault is never writable over HTTP.
 
 ## What it touches
 
@@ -132,12 +166,13 @@ No telemetry, no network calls to anything not configured above.
 plugin.yaml          manifest (tools, hooks, settings)
 __init__.py          register(ctx)
 registry_kb.py       Markdown ↔ node model, atomic writer, change-log
+credentials.py       private 0600 credential vault + registry literal scanner
 collectors/          local host, Hermes runtime, Proxmox, Headscale, probes
 fusion.py            correlation + drift classification + sweep
 uptime.py            probes → incidents → playbook/agent response, watchdog script
 matcher.py           tool call → nodes (IPs, units, VMIDs, paths)
 hooks.py             pre_tool_call guardrail, post_tool_call activity
-atlas_tools.py       the six tools
+atlas_tools.py       the seven tools
 dashboard/           FastAPI routes under /api/plugins/infra-atlas
 desktop/plugin.js    full-page graph, inspector, statusbar chip, ::infra / ::drift cards
 skills/infra-atlas/  the bundled protocol skill
