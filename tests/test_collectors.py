@@ -334,3 +334,99 @@ def test_tailscale_peer_offline_is_unknown_not_down(plugin_home, monkeypatch):
     assert by_id["srv-laptop"]["health_status"] == "unknown"
     assert by_id["srv-desktop"]["health_status"] == "up"
     assert by_id["srv-laptop"]["kind"] == "peer"
+
+
+def test_a_peer_observation_never_rewrites_what_a_node_is(plugin_home):
+    """A tailnet sighting enriches the address; it must not restamp kind/managed_by."""
+    H.load_plugin()
+    fusion = H.submodule("fusion")
+
+    doc_nodes = [
+        {
+            "id": "svc-headscale",
+            "kind": "container",
+            "stratum": 3,
+            "label": "Headscale",
+            "host_ip": "10.0.0.180",
+            "managed_by": "docker-compose",
+            "registry_path": "services/headscale.md",
+            "doc_status": "active",
+            "health_status": "unknown",
+        }
+    ]
+    live_nodes = [
+        {
+            "id": "srv-headscale",
+            "kind": "peer",
+            "label": "headscale",
+            "tailnet_ip": "100.64.0.18",
+            "managed_by": "tailscale",
+            "health_status": "up",
+        }
+    ]
+    merged, matched = fusion._correlate(doc_nodes, live_nodes)
+    node = merged["svc-headscale"]
+    assert node["kind"] == "container"
+    assert node["managed_by"] == "docker-compose"
+    assert node["tailnet_ip"] == "100.64.0.18"
+
+
+def test_inference_servers_are_probed_and_paging(plugin_home):
+    """A new kind must be probe-eligible, or it quietly degrades to doc_only."""
+    H.load_plugin()
+    fusion = H.submodule("fusion")
+    probes = H.submodule("collectors.probes")
+
+    nodes = {
+        "svc-llama": {
+            "id": "svc-llama",
+            "kind": "inference",
+            "probe": "http://10.0.0.143:8081/api/fleet",
+            "registry_path": "services/llama-server.md",
+        }
+    }
+    targets = fusion._probe_targets(nodes)
+    assert [target["id"] for target in targets] == ["svc-llama"]
+    assert "inference" in probes._INCIDENT_KINDS
+
+
+def test_a_broken_hermes_config_is_reported_not_silently_empty(plugin_home, monkeypatch):
+    """A config read that fails must not look like "this profile has no endpoints"."""
+    H.load_plugin()
+    runtime = H.submodule("collectors.hermes_runtime")
+    import sys
+    import types
+
+    # a config module that raises on import-time dependencies (ruamel, in the wild)
+    package = types.ModuleType("hermes_cli")
+    package.__path__ = []
+    config_module = types.ModuleType("hermes_cli.config")
+
+    def boom():
+        raise RuntimeError("ruamel missing")
+
+    config_module.load_config_readonly = boom
+    monkeypatch.setitem(sys.modules, "hermes_cli", package)
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", config_module)
+    runtime._CONFIG_ERROR = None
+    result = runtime.collect()
+    assert any("hermes config" in error for error in result.errors)
+    assert result.nodes  # the agent + cron nodes are still collected
+
+
+def test_a_failing_collector_does_not_prune_its_nodes(plugin_home, registry):
+    """Partial inventory must never delete real nodes (model endpoints once vanished)."""
+    H.load_plugin()
+    store = H.submodule("store").get_store()
+    store.upsert_node(
+        {"id": "model-keepme", "kind": "model_endpoint", "label": "keep me", "managed_by": "hermes-config"}
+    )
+    live_result = H.submodule("collectors").CollectorResult(source="hermes")
+    live_result.errors.append("hermes config: boom")
+    assert live_result.errors
+    fusion = H.submodule("fusion")
+    owners = fusion._owner_families(["local", "hermes"])
+    for failed in {"hermes"}:
+        owners -= fusion._OWNER_FAMILIES.get(failed, set())
+    store.prune_live_nodes(owners, keep_ids=[])
+    assert store.get_node("model-keepme") is not None

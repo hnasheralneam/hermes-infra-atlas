@@ -106,6 +106,23 @@ if (!/ia-edge|ia-chip/i.test(page?.html || '')) {
   process.exit(1)
 }
 
+// Docker containers and inference servers must be visually distinct from services.
+const classes = page?.html || ''
+if (!classes.includes('ia-kind-inference') || !classes.includes('ia-kind-container')) {
+  console.log('FAIL inference/container silhouettes missing from the scene')
+  process.exit(1)
+}
+const fans = (classes.match(/class="ia-fan-blades"/g) || []).length
+if (fans !== 2) {
+  console.log(`FAIL inference node drew ${fans} fan(s), expected 2 (one per visible face)`)
+  process.exit(1)
+}
+if (!classes.includes('ia-door') || !classes.includes('ia-heat')) {
+  console.log('FAIL container crate or inference heat shimmer missing')
+  process.exit(1)
+}
+console.log(`ok   containers draw a crate, inference servers draw GPU fans (${fans} fans, heat shimmer present)`)
+
 const drawn = (page?.html?.match(/data-node-id="/g) || []).length
 const allBadge = page?.html?.match(/<span class="ia-seg-count">(\d+)<\/span>/g) || []
 if (!drawn) {

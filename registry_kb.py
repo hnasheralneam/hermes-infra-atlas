@@ -24,7 +24,45 @@ from typing import Any, Optional
 
 FOLDERS = {"servers": "server", "services": "service", "projects": "project"}
 KIND_PREFIX = {"server": "srv", "service": "svc", "project": "proj", "vm": "vm", "lxc": "lxc", "container": "ct", "agent": "agent"}
-KIND_STRATUM = {"server": 1, "network": 1, "vm": 2, "lxc": 2, "container": 2, "service": 3, "project": 3, "agent": 4, "model_endpoint": 4, "cron": 4}
+KIND_STRATUM = {
+    "server": 1,
+    "network": 1,
+    "vm": 2,
+    "lxc": 2,
+    # A container is a workload, not compute: it belongs beside the services it
+    # backs, drawn with its own silhouette.
+    "container": 3,
+    "service": 3,
+    "inference": 3,
+    "project": 3,
+    "agent": 4,
+    "model_endpoint": 4,
+    "cron": 4,
+}
+
+# Visual kinds: the registry's `kind` decides the silhouette, so a Docker workload
+# should not look like a bare systemd service and a model server should not look
+# like either. These are inferred from what the entry says about itself.
+_CONTAINER_MANAGERS = re.compile(r"\b(?:docker|docker-compose|compose|podman|containerd|k3s|k8s|kubernetes)\b", re.I)
+_INFERENCE_MARKERS = re.compile(
+    r"(?:llama[-_ ]?server|llama\.cpp|llama-cpp|llamafile|vllm|ollama|sglang|tensorrt|trt[-_ ]?llm"
+    r"|text-generation-inference|\btgi\b|koboldcpp|localai|lmstudio|lm\s?studio|mlx-lm|exllama|vllm-openai)",
+    re.I,
+)
+# A control plane for models is not itself a model server.
+_INFERENCE_CONTROL_WORDS = re.compile(r"(?:dashboard|control|proxy|metrics|shim|router|monitor|playbook)", re.I)
+
+
+def _runtime_kind(kind: str, managed: Optional[str], label: str, unit: Optional[str], node_id: str) -> str:
+    """Return the kind used for drawing: container / inference / unchanged."""
+    if kind not in {"service", "container", "model_endpoint"}:
+        return kind
+    haystack = " ".join(str(part) for part in (label, unit, node_id) if part)
+    if _INFERENCE_MARKERS.search(haystack) and not _INFERENCE_CONTROL_WORDS.search(str(label or "")):
+        return "inference"
+    if _CONTAINER_MANAGERS.search(str(managed or "")):
+        return "container"
+    return kind
 
 _FRONTMATTER_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.S)
 _PRIVATE_IP_RE = re.compile(
@@ -384,6 +422,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
     parent_id = str(meta.get("parent_id") or "").strip() or None
     if resolved_kind == "server" and (vmid or (parent_id and str(managed).lower() == "proxmox")):
         resolved_kind = "vm"
+    resolved_kind = _runtime_kind(resolved_kind, managed, label, unit, node_id)
     node = {
         "id": node_id,
         "kind": resolved_kind,

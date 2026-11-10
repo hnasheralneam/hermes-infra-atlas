@@ -313,7 +313,8 @@ def collect() -> CollectorResult:
             {
                 "id": f"ct-{_slug(container['name'])}",
                 "kind": "container",
-                "stratum": 2,
+                # A container is a workload, not compute: draw it beside the services.
+                "stratum": 3,
                 "label": container["name"],
                 "parent_id": host_id,
                 "ports": container["ports"],

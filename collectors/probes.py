@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 MAX_WORKERS = 12
 DEFAULT_TIMEOUT = 1.5
-_INCIDENT_KINDS = {"service", "container", "model_endpoint", "vm", "lxc"}
+_INCIDENT_KINDS = {"service", "container", "inference", "model_endpoint", "vm", "lxc"}
 
 
 def _target_of(node: dict[str, Any]) -> Optional[tuple[str, str, Optional[str]]]:

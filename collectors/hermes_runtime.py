@@ -8,6 +8,7 @@ Read-only: config through ``load_config_readonly``, jobs from the cron store.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -18,17 +19,31 @@ from urllib.parse import urlparse
 
 from . import CollectorResult
 
+logger = logging.getLogger(__name__)
+
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-") or "node"
 
 
+_CONFIG_ERROR: Optional[str] = None
+
+
 def _config() -> dict[str, Any]:
+    """Read the Hermes config, remembering *why* it failed.
+
+    Returning {} silently made a broken config loader look like "this profile
+    models nothing", which then pruned the model endpoints from the graph.
+    """
+    global _CONFIG_ERROR
     try:
         from hermes_cli.config import load_config_readonly
 
+        _CONFIG_ERROR = None
         return load_config_readonly() or {}
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - reported through the collector result
+        _CONFIG_ERROR = f"{type(exc).__name__}: {exc}"
+        logger.warning("infra-atlas: Hermes config unavailable: %s", _CONFIG_ERROR)
         return {}
 
 
@@ -139,6 +154,8 @@ def _cron_jobs() -> list[dict[str, Any]]:
 def collect() -> CollectorResult:
     result = CollectorResult(source="hermes")
     config = _config()
+    if _CONFIG_ERROR:
+        result.errors.append(f"hermes config: {_CONFIG_ERROR}")
     profile = _profile_name()
     agent_id = f"agent-hermes-{_slug(profile)}"
     now = time.time()

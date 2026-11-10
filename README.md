@@ -180,10 +180,16 @@ pan/zoom — still selectable, keyboard-reachable and crisp at any zoom):
   landmass.
 - Every node kind is its own 3-D silhouette: server = LED-blinking rack,
   VM = tower with a scanning screen, LXC = tank whose liquid level tracks
-  uptime, container = humming corrugated cargo box, service = pad,
-  project = plate, agent = hovering bot, model endpoint = orbiting orb,
-  cron = clock with a rotating hand, peer = pyramid with ping rings. Health is
-  a colored beacon; drift is a floating chip and an underglow.
+  uptime, **container = corrugated cargo crate with doors**, service = pad,
+  **inference server = low GPU chassis with two spinning fan discs and a heat
+  shimmer**, project = plate, agent = hovering bot, model endpoint = orbiting
+  orb, cron = clock with a rotating hand, peer = pyramid with ping rings.
+  Health is a colored beacon; drift is a floating chip and an underglow.
+- Container and inference silhouettes are **inferred**, not hand-filed: an entry
+  managed by docker/podman/compose draws as a crate, and one that names a model
+  server (llama-server, llama.cpp, vLLM, Ollama, SGLang, TensorRT-LLM, TGI,
+  llama.cpp forks…) draws as a GPU rig — while its control plane (dashboard,
+  control, proxy, metrics shim, router) stays a plain service.
 - Edges are routed on the tile grid (A\* with footprint obstacles + congestion
   cost): parallel connections fan into side-by-side lanes, terrace steps are
   crossed squarely, and each relation has its own color, dash rhythm and a

@@ -25,7 +25,9 @@ RUNTIME_KINDS = {"agent", "cron", "model_endpoint", "container"}
 # Hermes runtime nodes live in Stratum 4 and must never be swallowed into Stratum 3/1 doc nodes.
 HERMES_RUNTIME_KINDS = {"agent", "cron", "model_endpoint"}
 # Kinds worth probing even without an explicit probe declaration.
-PROBE_KINDS = {"service", "container", "model_endpoint", "vm", "lxc", "server"}
+# Anything we can dial belongs here: leaving a kind out means it is never probed and
+# silently degrades to doc_only, which looks like "no data" rather than "not checked".
+PROBE_KINDS = {"service", "container", "inference", "model_endpoint", "vm", "lxc", "server"}
 
 
 def _slug(text: str) -> str:
@@ -158,7 +160,7 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
                 target_id = None
         if target_id is None and live.get("tailnet_ip") and live_kind in {"server", "vm", "lxc", "peer"}:
             for candidate, doc in by_id.items():
-                if str(doc.get("kind")) not in {"server", "vm", "lxc", "service"}:
+                if str(doc.get("kind")) not in DOC_KINDS:
                     continue
                 if doc.get("host_ip") and live.get("host_ip") and str(doc["host_ip"]) != str(live["host_ip"]):
                     continue
@@ -169,7 +171,7 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
             peer_slug = _slug(str(live["label"]))
             for candidate, doc in by_id.items():
                 doc_slug = _slug(str(doc.get("label") or ""))
-                if str(doc.get("kind")) in {"vm", "lxc", "server", "service"} and (
+                if str(doc.get("kind")) in DOC_KINDS and (
                     doc_slug == peer_slug
                     or candidate.endswith(f"-{peer_slug}")
                     or (peer_slug == "ldap" and doc_slug == "openldap")
@@ -195,7 +197,10 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
             id_remap[live_id] = target_id
         merged = by_id[target_id]
         # A tailnet peer observation enriches tailnet_ip/online status without clobbering server/service kind/ports.
-        if live_kind == "peer" and str(merged.get("kind")) in {"server", "vm", "lxc", "service"}:
+        # A tailnet peer observation may only enrich tailnet_ip/online state. It must
+        # never overwrite what the entry is (kind, unit, managed_by) — that is how a
+        # docker-compose service turned into "managed_by: tailscale" and drifted.
+        if live_kind == "peer" and str(merged.get("kind")) != "peer":
             if not merged.get("tailnet_ip") and live.get("tailnet_ip"):
                 merged["tailnet_ip"] = live["tailnet_ip"]
             merged.setdefault("live_state", {})
@@ -303,6 +308,11 @@ def _classify(node: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]
 
 # Which ``managed_by`` values each collector owns. A sweep prunes only inside
 # the families of the collectors that ran, so partial sweeps stay additive.
+# Kinds a tailnet peer or an address sighting may enrich. Containers, inference
+# servers and model endpoints are documented workloads too; leaving them out made
+# a podman-hosted service show up twice (its entry + a duplicate peer node).
+DOC_KINDS = frozenset({"server", "vm", "lxc", "service", "container", "inference", "model_endpoint", "project"})
+
 _OWNER_FAMILIES: dict[str, set[str]] = {
     "local": {"host", "systemd-user", "systemd-system", "docker", "tailscale"},
     "headscale": {"headscale", "tailscale"},
@@ -506,6 +516,11 @@ def run_sweep(
         # demo swing would otherwise wipe the real inventory until the next
         # full sweep), and a documented node always survives as doc_only.
         owners = _owner_families(requested)
+        # A collector that errored half-way must not be trusted to say what is gone:
+        # pruning on a partial inventory deletes real nodes (a broken config read
+        # once removed every model endpoint from the graph).
+        for failed in {result.source for result in live_results if result.errors}:
+            owners -= _OWNER_FAMILIES.get(failed, set())
         if owners:
             store.prune_live_nodes(owners, [node["id"] for node in persisted])
             # A node that vanished takes its open incidents with it.

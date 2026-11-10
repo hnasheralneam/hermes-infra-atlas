@@ -20,6 +20,8 @@ export const FIXTURE = {
       { id: 'lxc-202-cache', kind: 'lxc', label: 'cache-tank', stratum: 2, vmid: 202, parent_id: 'srv-pve', drift_status: 'changed', health_status: 'up', host_ip: '10.20.0.22', managed_by: 'proxmox', registry_path: 'servers/cache-tank.md', drift_reasons: ['host_ip: registry says 10.20.0.30, live is 10.20.0.22'] },
       { id: 'ct-redis', kind: 'container', label: 'redis', stratum: 2, parent_id: 'srv-pve', drift_status: 'matched', health_status: 'degraded', host_ip: '10.20.0.23', managed_by: 'docker', uptime_24h_pct: 97.2 },
       { id: 'svc-gateway', kind: 'service', label: 'edge-gateway', stratum: 3, parent_id: 'lxc-202-cache', drift_status: 'matched', health_status: 'up', host_ip: '10.20.0.31', ports: [443], managed_by: 'docker', registry_path: 'services/edge-gateway.md', last_seen_live_at: 1794000040, uptime_24h_pct: 99.9, latency_ms: 6 },
+      { id: 'ct-docker-wazuh', kind: 'container', label: 'wazuh', stratum: 3, parent_id: 'lxc-202-cache', drift_status: 'matched', health_status: 'up', host_ip: '10.20.0.24', ports: [443], managed_by: 'docker' },
+      { id: 'svc-llama', kind: 'inference', label: 'llama-server', stratum: 3, parent_id: 'vm-101-ops', drift_status: 'matched', health_status: 'up', host_ip: '10.20.0.25', ports: [8080], managed_by: 'llama-control', registry_path: 'services/llama-server.md', latency_ms: 9, uptime_24h_pct: 99.1 },
       { id: 'svc-render', kind: 'service', label: 'render-farm', stratum: 3, parent_id: 'vm-101-ops', drift_status: 'stale', health_status: 'down', host_ip: '10.20.0.32', ports: [8081], managed_by: 'systemd-user', registry_path: 'services/render-farm.md', pitfalls_summary: 'Start it through Control on :8081.', drift_reasons: ['probe failed: connect refused'] },
       { id: 'proj-migration', kind: 'project', label: 'pve8-migration', stratum: 3, parent_id: 'vm-101-ops', drift_status: 'doc_only', health_status: 'unknown', project_path: '/srv/migration' },
       { id: 'agent-hermes', kind: 'agent', label: 'hermes', stratum: 4, drift_status: 'matched', health_status: 'up' },
@@ -40,7 +42,7 @@ export const FIXTURE = {
       { source_id: 'svc-gateway', target_id: 'ct-redis', relation: 'depends_on' }
     ],
     incidents: [{ id: 7, node_id: 'svc-render', node_label: 'render-farm', status: 'open', trigger_error: 'connect refused 10.20.0.32:8081', opened_at: 1794000000, attempts: 1 }],
-    counts: { matched: 7, changed: 1, unregistered: 0, stale: 1, observed: 1, doc_only: 2, total: 12 },
+    counts: { matched: 9, changed: 1, unregistered: 1, stale: 1, observed: 1, doc_only: 2, total: 14 },
     fleet: { monitored_nodes: 11, down_nodes: 1, avg_uptime_24h_pct: 98.6 },
     last_sweep: { sweep_id: 'sw-1', finished_at: 1794000100, duration_ms: 900 },
     activity: [{ ts: 1794000000, session_id: 's1', tool_name: 'terminal', node_id: 'svc-render', action_kind: 'touch_blocked', blocked: 1, summary: 'ssh root@10.20.0.32' }],

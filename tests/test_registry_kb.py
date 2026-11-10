@@ -196,3 +196,42 @@ def test_udp_ports_and_index_decommissioned_entries(plugin_home, registry):
     assert by_id["svc-stk"]["probe"] is None
     assert by_id["svc-old-relay"]["doc_status"] == "removed"
     assert by_id["svc-old-relay"]["probe"] is None
+
+
+def test_docker_workloads_and_model_servers_get_their_own_kind(plugin_home, registry):
+    """Silhouette follows what the entry says it is: container, inference, or service."""
+    H.load_plugin()
+    kb = H.submodule("registry_kb")
+    cases = {
+        "ctfd": ("kind: service\nmanaged_by: docker-compose\nhost_ip: 10.0.0.59\n", "container"),
+        "forgejo": ("kind: service\nmanaged_by: docker\nhost_ip: 10.0.0.132\n", "container"),
+        "llama-server": ("kind: service\nmanaged_by: llama-control\nsystemd_unit: llama-dashboard.service\n", "inference"),
+        "vllm": ("kind: service\nmanaged_by: llama-control\n", "inference"),
+        "ollama": ("kind: service\nsystemd_unit: ollama.service\n", "inference"),
+        "llama-dashboard": ("kind: service\nmanaged_by: systemd-user\nsystemd_unit: llama-dashboard.service\n", "service"),
+        "caddy-vllm-proxy": ("kind: service\nmanaged_by: systemd-user\n", "service"),
+        "vllm-metrics-shim": ("kind: service\nmanaged_by: systemd-user\n", "service"),
+        "plain-api": ("kind: service\nmanaged_by: systemd-user\n", "service"),
+    }
+    for name, (front, expected) in cases.items():
+        (registry / "services" / f"{name}.md").write_text(
+            f"---\nid: svc-{name}\nlabel: {name}\n{front}status: active\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+    nodes, _ = kb.parse_registry(registry)
+    by_id = {node["id"]: node for node in nodes}
+
+    assert by_id["svc-ctfd"]["kind"] == "container"
+    assert by_id["svc-ctfd"]["stratum"] == 3
+    assert by_id["svc-forgejo"]["kind"] == "container"
+    assert by_id["svc-llama-server"]["kind"] == "inference"
+    assert by_id["svc-vllm"]["kind"] == "inference"
+    assert by_id["svc-ollama"]["kind"] == "inference"
+    # the control plane for the models is still an ordinary service
+    assert by_id["svc-llama-dashboard"]["kind"] == "service"
+    assert by_id["svc-caddy-vllm-proxy"]["kind"] == "service"
+    assert by_id["svc-vllm-metrics-shim"]["kind"] == "service"
+    assert by_id["svc-plain-api"]["kind"] == "service"
+
+    for name in ("svc-llama-server", "svc-vllm", "svc-ollama"):
+        assert by_id[name]["stratum"] == 3

@@ -143,6 +143,7 @@ const KIND_SCENE = {
   project: { shape: 'plate', accent: '#eab308', mat: '#4a4e60', top: 8, shadow: 32 },
   agent: { shape: 'bot', accent: '#38bdf8', mat: '#414a63', top: 50, shadow: 17 },
   model_endpoint: { shape: 'orb', accent: '#e879f9', mat: '#453f5e', top: 40, shadow: 15 },
+  inference: { shape: 'gpu', accent: '#fb923c', mat: '#4a4046', top: 46, shadow: 30 },
   cron: { shape: 'clock', accent: '#4ade80', mat: '#3f4a4c', top: 33, shadow: 21 },
   peer: { shape: 'beacon', accent: '#818cf8', mat: '#484e66', top: 40, shadow: 23 },
   network: { shape: 'pad', accent: '#22d3ee', mat: '#3e4a5c', top: 10, shadow: 26 }
@@ -789,6 +790,60 @@ function CargoBody({ scene }) {
   ]
 }
 
+// Inference server: a low chassis with two spinning fan discs and accelerator
+// blades on the deck. Deliberately unlike the flat service pad and the container
+// crate — you should be able to tell at a glance what is eating the GPU.
+function GpuBody({ node, scene }) {
+  const g = boxGeom(0.66, 0.4, 26)
+  const faceCentre = (a, at, bt, b) => ({
+    x: (a.x + at.x + bt.x + b.x) / 4,
+    y: (a.y + at.y + bt.y + b.y) / 4
+  })
+  const fan = (centre, key) => {
+    const cx = r2(centre.x)
+    const cy = r2(centre.y)
+    // Blades are drawn around 0,0 inside a translated group so the CSS rotation
+    // pivots on the hub instead of the group's bounding box.
+    const blades = [0, 60, 120, 180, 240, 300].map(deg =>
+      jsx(
+        'path',
+        {
+          d: `M 0 0 l ${r2(6.4 * Math.cos((deg * Math.PI) / 180))} ${r2(2.6 * Math.sin((deg * Math.PI) / 180))}`,
+          className: 'ia-fan-blade'
+        },
+        `blade-${deg}`
+      )
+    )
+    return jsxs(
+      'g',
+      {
+        className: 'ia-fan',
+        transform: `translate(${cx} ${cy})`,
+        children: [
+          jsx('ellipse', { cx: 0, cy: 0, rx: 8.6, ry: 4.4, className: 'ia-fan-rim', style: { stroke: scene.accent } }, 'rim'),
+          jsxs('g', { className: 'ia-fan-blades', children: blades }, 'blades'),
+          jsx('ellipse', { cx: 0, cy: 0, rx: 2.4, ry: 1.2, className: 'ia-fan-hub', style: { fill: scene.accent } }, 'hub')
+        ]
+      },
+      key
+    )
+  }
+  const deckFins = [0.22, 0.4, 0.58, 0.76].map(f => along(lerp(g.At, g.Dt, f), lerp(g.Bt, g.Ct, f), 0.86))
+  return [
+    jsx('path', { d: g.backL, className: 'ia-f-back' }, 'bl'),
+    jsx('path', { d: g.backR, className: 'ia-f-back' }, 'br'),
+    jsx('path', { d: g.left, className: 'ia-f-left' }, 'l'),
+    jsx('path', { d: g.right, className: 'ia-f-right' }, 'r'),
+    jsx('path', { d: g.top, className: 'ia-f-top' }, 't'),
+    jsx('path', { d: deckFins.join(' '), className: 'ia-groove' }, 'fins'),
+    jsx('path', { d: along(g.At, g.Dt, 0.08), className: 'ia-detail' }, 'd1'),
+    fan(faceCentre(g.D, g.Dt, g.Ct, g.C), 'fan-l'),
+    fan(faceCentre(g.C, g.Ct, g.Bt, g.B), 'fan-r'),
+    jsx('ellipse', { cx: 0, cy: 3, rx: 22, ry: 10, className: 'ia-heat', style: { stroke: scene.accent } }, 'heat'),
+    jsx('circle', { cx: r2(lerp(g.Ct, g.Bt, 0.5).x), cy: r2(lerp(g.Ct, g.Bt, 0.5).y - 2), r: 1.6, className: 'ia-led ia-led-f', style: { fill: scene.accent } }, 'led')
+  ]
+}
+
 function PadBody({ scene }) {
   const g = boxGeom(0.46, 0.46, 8)
   const top = lerp(g.At, g.Ct, 0.5)
@@ -900,6 +955,7 @@ function BeaconBody({ node, scene }) {
 
 const SHAPE_BODIES = {
   rack: RackBody,
+  gpu: GpuBody,
   tower: TowerBody,
   tank: TankBody,
   cargo: CargoBody,
@@ -1499,9 +1555,9 @@ const LegendGlyph = React.memo(function LegendGlyph({ kind }) {
 })
 
 const LEGEND_KINDS = [
-  ['server', 'Server'], ['vm', 'Virtual machine'], ['lxc', 'LXC container'], ['container', 'Container'],
-  ['service', 'Service'], ['project', 'Project'], ['agent', 'Hermes agent'], ['model_endpoint', 'Model endpoint'],
-  ['cron', 'Cron job'], ['peer', 'Tailnet peer']
+  ['server', 'Server'], ['vm', 'Virtual machine'], ['lxc', 'LXC container'], ['container', 'Docker container'],
+  ['service', 'Service'], ['inference', 'Inference server'], ['project', 'Project'], ['agent', 'Hermes agent'],
+  ['model_endpoint', 'Model endpoint'], ['cron', 'Cron job'], ['peer', 'Tailnet peer']
 ]
 const LEGEND_LINKS = [
   ['hosts', 'Hosts'], ['depends_on', 'Depends on'], ['uses_model', 'Uses model'],
@@ -3696,6 +3752,15 @@ const CSS = `
 
 .ia-node { cursor: pointer; }
 
+/* Inference server: spinning fans and a heat shimmer. */
+.ia-fan-blades { transform-box: view-box; transform-origin: 0 0; animation: ia-spin 2.6s linear infinite; }
+.ia-fan-rim { fill: none; stroke-width: 1; opacity: 0.75; }
+.ia-fan-hub { opacity: 0.9; }
+.ia-fan-blade { stroke: rgba(226, 232, 240, 0.55); stroke-width: 1.1; stroke-linecap: round; }
+.ia-heat { fill: none; stroke-width: 1.2; opacity: 0.28; animation: ia-heat-pulse 3.4s ease-in-out infinite; }
+@keyframes ia-spin { to { transform: rotate(360deg); } }
+@keyframes ia-heat-pulse { 0%, 100% { opacity: 0.12; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.06); } }
+
 /* A lean fleet: decoration is data. Everything else holds still so panning a
    hundred nodes does not animate a hundred independent compositor layers. */
 .ia-still, .ia-still * { animation: none !important; }
@@ -3792,7 +3857,7 @@ path.ia-glass { stroke: rgba(255, 255, 255, 0.16); stroke-width: 1; }
   .ia-hum, .ia-bob, .ia-blink, .ia-ping, .ia-beacon-up, .ia-beacon-degraded, .ia-beacon-down, .ia-alert,
   .ia-chipf, .ia-dglow, .ia-sel-ring, .ia-enter .ia-lift, .ia-enter .ia-shadow,
   .ia-pulse-touch_blocked .ia-lift, .ia-pulse-touch_allowed .ia-lift, .ia-pulse-read_doc .ia-lift,
-  .ia-incident-pulse, .ia-live-dot { animation: none; }
+  .ia-incident-pulse, .ia-live-dot, .ia-fan-blades, .ia-heat { animation: none; }
   .ia-packet, .ia-burst { display: none; }
 }
 `
