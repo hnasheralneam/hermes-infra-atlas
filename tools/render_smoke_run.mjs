@@ -106,6 +106,17 @@ if (!/ia-edge|ia-chip/i.test(page?.html || '')) {
   process.exit(1)
 }
 
+// The plugin host themes the frame with --foreground / --card / --muted-foreground.
+// Consuming only the in-tree --ui-* names is what left the canvas dark while the
+// app's text turned black in light mode.
+for (const token of ['var(--foreground', 'var(--card', 'var(--muted-foreground']) {
+  if (!(page?.html || '').includes(token)) {
+    console.log(`FAIL the page does not consume the frame theme token ${token})`)
+    process.exit(1)
+  }
+}
+console.log('ok   page consumes the frame theme tokens (foreground, card, muted)')
+
 // Docker containers and inference servers must be visually distinct from services.
 const classes = page?.html || ''
 if (!classes.includes('ia-kind-inference') || !classes.includes('ia-kind-container')) {

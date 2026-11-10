@@ -262,10 +262,13 @@ The page around it stays deliberately sparse:
   window edge, and labels freeze while it moves so the scene keeps its frame rate. Gestures are handled imperatively — the viewBox is written in a
   rAF and React state only syncs when the gesture ends — so a hundred-node fleet pans at
   frame rate instead of re-rendering the whole tree per pointermove.
-- **Both themes.** The diorama carries its own palette (ground, terraces, node bodies, ink,
-  label halos, edge weights) and flips it when the app is in light mode: paper-white ground,
-  powder-blue terraces, graphite labels, darkened edge strokes. Detection reads the app's own
-  text colour by painting a swatch and measuring it, so a theme switch is picked up live.
+- **Both themes, by construction.** The diorama derives its whole palette from the two values
+  the plugin host provides — `--card` (surface) and `--foreground` (ink): the ground is the
+  card colour, node bodies are a card/ink mix tinted 14% with the kind's accent, terraces are
+  the same mix with a tier tint, labels use the ink with a card-coloured halo. Nothing is
+  hard-coded to one theme, so a light app gets light terraces and dark labels and a dark app
+  gets the inverse, with contrast around 7:1 (dark) and 9:1 (light). A lightweight probe only
+  tunes shadows and the glow.
 - **Decoration is data.** Past ~44 nodes the canvas goes lean: perpetual LED/scan/packet
   animation is kept only for the selected node, nodes with incidents and their edges, and
   everything else holds still (and `prefers-reduced-motion` wins everywhere).

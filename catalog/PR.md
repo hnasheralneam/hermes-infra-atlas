@@ -89,8 +89,8 @@ and a dashboard router.
 
 ## Verification in this repo
 
-- `pytest`: 100 passed, 1 skipped (the skip needs `ruamel.yaml`). Coverage of the plugin package
-  is 82% of statements (`coverage run --source=. -m pytest`); CI fails under 75%.
+- `pytest`: 116 passed, 1 skipped (the skip needs `ruamel.yaml`). Coverage of the plugin package
+  is 83% of statements (`coverage run --source=. -m pytest`); CI fails under 75%.
 - Desktop: `tools/render_smoke.mjs` renders all 8 registered surfaces and asserts a down node
   draws a red beacon and retired entries stay off the map; `tools/viewport_test.mjs` drives the
   real component in JSDOM — wheel zoom stays anchored under the cursor, drag pans in the

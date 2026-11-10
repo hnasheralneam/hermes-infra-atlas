@@ -35,15 +35,15 @@ const HEALTH_COLOR = {
   up: 'var(--ui-success, #10b981)',
   degraded: 'var(--ui-warning, #f59e0b)',
   down: 'var(--ui-danger, #ef4444)',
-  unknown: 'var(--ui-text-quaternary, #6b7280)'
+  unknown: 'var(--muted-foreground, var(--ui-text-quaternary, #6b7280))'
 }
 const DRIFT_COLOR = {
   matched: 'var(--ui-success, #10b981)',
   changed: 'var(--ui-warning, #f59e0b)',
   unregistered: 'var(--ui-info, #06b6d4)',
   stale: 'var(--ui-danger, #ef4444)',
-  observed: 'var(--ui-text-tertiary, #8b8f98)',
-  doc_only: 'var(--ui-text-quaternary, #6b7280)'
+  observed: 'var(--muted-foreground, var(--ui-text-tertiary, #8b8f98))',
+  doc_only: 'var(--muted-foreground, var(--ui-text-quaternary, #6b7280))'
 }
 const DRIFT_GROUP = {
   matched: 'matched',
@@ -134,6 +134,9 @@ function seeded(id, salt) {
   return (h >>> 0) / 4294967296
 }
 
+// `mat` is the dark-theme body colour, `matLight` its light-theme twin. Keeping
+// both per kind preserves the material differences between a rack, a tank and a
+// crate instead of flattening every node to one grey.
 const KIND_SCENE = {
   server: { shape: 'rack', accent: '#dbe3f0', mat: '#4a5060', top: 54, shadow: 34 },
   vm: { shape: 'tower', accent: '#818cf8', mat: '#424a5e', top: 52, shadow: 26 },
@@ -1004,8 +1007,7 @@ const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, 
       event.stopPropagation()
       onSelect(node.id)
     },
-    // --ia-mat flips with the theme; the per-kind mat stays as the dark fallback.
-    style: { '--mat': `var(--ia-mat, ${scene.mat})`, '--acc': scene.accent, '--d': `${delay}ms` },
+    style: { '--acc': scene.accent, '--d': `${delay}ms` },
     children: [
       jsx('title', { children: `${node.label || node.id} (${node.kind}${sub ? ' · ' + sub : ''})` }),
       jsx('path', { d: `M 0 ${r2(2.5 - scene.shadow / 2)} L ${r2(scene.shadow)} 2.5 L 0 ${r2(2.5 + scene.shadow / 2)} L ${r2(-scene.shadow)} 2.5 Z`, className: 'ia-shadow' }),
@@ -1147,38 +1149,74 @@ function useLightTheme() {
   React.useEffect(() => {
     if (typeof document === 'undefined' || !document.documentElement) return undefined
     let media = null
+    let timer = 0
+    let last = null
+
+    // Custom properties compute to their token stream, so the only reliable probe
+    // is to paint one and read the used value back.
+    const sample = (host, declaration) => {
+      const probe = document.createElement('span')
+      probe.setAttribute('aria-hidden', 'true')
+      probe.style.cssText = `position:absolute;width:0;height:0;opacity:0;pointer-events:none;${declaration}`
+      host.appendChild(probe)
+      const style = getComputedStyle(probe)
+      const value = { color: style.color, background: style.backgroundColor }
+      probe.remove()
+      return value
+    }
+    const luminance = value => {
+      const parts = String(value || '').match(/[\d.]+/g)
+      if (!parts || parts.length < 3) return null
+      const [r, g, b] = parts.slice(0, 3).map(Number)
+      return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+    }
+    const alpha = value => {
+      const parts = String(value || '').match(/[\d.]+/g)
+      return parts && parts.length > 3 ? Number(parts[3]) : 1
+    }
+
     const read = () => {
       try {
         const host = document.querySelector('.ia-root') || document.body
         if (!host) return
-        const probe = document.createElement('span')
-        probe.setAttribute('aria-hidden', 'true')
-        probe.style.cssText =
-          'position:absolute;width:0;height:0;opacity:0;pointer-events:none;color:var(--ui-text-primary, currentColor)'
-        host.appendChild(probe)
-        const painted = getComputedStyle(probe).color
-        probe.remove()
-        const parts = String(painted).match(/[\d.]+/g)
-        if (!parts || parts.length < 3) return
-        const [r, g, b] = parts.slice(0, 3).map(Number)
-        const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
-        // Dark text on a light surface means light mode, and vice versa.
-        setLight(luminance < 0.5)
+        // The frame hands the surface and ink to us as --card / --foreground.
+        const surface = sample(host, 'background-color: var(--card, var(--ui-bg-primary, transparent))')
+        const ink = sample(host, 'color: var(--foreground, var(--ui-text-primary, currentColor))')
+        const surfaceLum = alpha(surface.background) > 0.2 ? luminance(surface.background) : null
+        const inkLum = luminance(ink.color)
+        let next = null
+        if (surfaceLum !== null) next = surfaceLum > 0.55
+        else if (inkLum !== null) next = inkLum < 0.5
+        if (next === null || next === last) return
+        last = next
+        setLight(next)
       } catch (error) {
-        /* keep the dark palette */
+        /* keep whatever we had */
       }
     }
+
     read()
     if (typeof MutationObserver !== 'undefined') {
       const observer = new MutationObserver(read)
-      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
-      if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] })
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme', 'data-color-mode'] })
+      if (document.body) {
+        observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
+      }
+      // Theme switches also arrive as a stylesheet swap on a wrapper with no
+      // attribute change we can see, so poll gently as well.
+      timer = setInterval(read, 2000)
       if (typeof window !== 'undefined' && window.matchMedia) {
         media = window.matchMedia('(prefers-color-scheme: light)')
         if (media.addEventListener) media.addEventListener('change', read)
       }
+      const onVisible = () => {
+        if (document.visibilityState !== 'hidden') read()
+      }
+      document.addEventListener('visibilitychange', onVisible)
       return () => {
         observer.disconnect()
+        clearInterval(timer)
+        document.removeEventListener('visibilitychange', onVisible)
         if (media && media.removeEventListener) media.removeEventListener('change', read)
       }
     }
@@ -1994,7 +2032,7 @@ function InfraAtlasPage() {
                               ? 'var(--ui-success, #10b981)'
                               : guardrailMode === 'warn'
                                 ? 'var(--ui-warning, #f59e0b)'
-                                : 'var(--ui-text-quaternary, #6b7280)'
+                                : 'var(--muted-foreground, var(--ui-text-quaternary, #6b7280))'
                         }
                       }),
                       guardrailMode === 'off'
@@ -3122,71 +3160,50 @@ function DriftCard() {
 const CSS = `
 /* ── layout & glassmorphic surfaces ──────────────────────────────────────── */
 .ia-root {
-  /* Diorama palette. One block of knobs, flipped wholesale by .ia-light, so the
-     3-D scene follows the app theme instead of hard-coding a dark cave. */
-  --ia-void: #090d16;
-  --ia-void-glow: rgba(30, 41, 59, 0.45);
-  --ia-mat: #454c5e;
+  /* The diorama derives every colour from the two values the plugin host gives us
+     (--card surface, --foreground ink), so it is correct in a dark *and* a light
+     theme without guessing which one is on. No hard-coded light palette to drift. */
+  --ia-void: color-mix(in srgb, var(--card, #0b1120) 96%, var(--foreground, #e2e8f0) 4%);
+  --ia-void-glow: color-mix(in srgb, var(--foreground, #cbd5e1) 5%, transparent);
+  --ia-mat: color-mix(in srgb, var(--card, #0f1523) 72%, var(--foreground, #e2e8f0) 28%);
   --ia-shade-top: #ffffff;
   --ia-shade-side: #000000;
-  --ia-plat-0: #3d3a47;
-  --ia-plat-1: #353c50;
-  --ia-plat-2: #3b3550;
-  --ia-plat-3: #2f4744;
-  --ia-ink: #e6ebf5;
-  --ia-ink-muted: #cbd5e1;
-  --ia-halo: rgba(8, 10, 16, 0.92);
-  --ia-halo-soft: rgba(8, 10, 16, 0.75);
-  --ia-grid: rgba(190, 205, 235, 0.13);
-  --ia-plat-edge: rgba(220, 235, 255, 0.16);
-  --ia-detail: rgba(255, 255, 255, 0.14);
+  --ia-ink: var(--foreground, #e6ebf5);
+  --ia-ink-muted: color-mix(in srgb, var(--foreground, #e2e8f0) 72%, transparent);
+  --ia-halo: color-mix(in srgb, var(--card, #0b1120) 92%, transparent);
+  --ia-halo-soft: color-mix(in srgb, var(--card, #0b1120) 78%, transparent);
+  --ia-grid: color-mix(in srgb, var(--foreground, #cbd5e1) 16%, transparent);
+  --ia-plat-edge: color-mix(in srgb, var(--foreground, #cbd5e1) 20%, transparent);
+  --ia-detail: color-mix(in srgb, var(--foreground, #e2e8f0) 16%, transparent);
   --ia-groove: rgba(0, 0, 0, 0.34);
-  --ia-shadow: rgba(3, 6, 14, 0.42);
+  --ia-shadow: rgba(0, 0, 0, 0.34);
   position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
   overflow: hidden;
   font-size: 12px;
-  color: var(--ui-text-primary, #e2e8f0);
-  background: radial-gradient(ellipse at 50% 35%, var(--ia-void-glow) 0%, var(--ui-bg-primary, var(--ia-void)) 78%);
+  color: var(--foreground, var(--ui-text-primary, #e2e8f0));
+  background: radial-gradient(ellipse at 50% 35%, var(--ia-void-glow) 0%, var(--card, var(--ui-bg-primary, #090d16)) 78%);
   user-select: none;
 }
 
-/* Light theme: paper-white ground, powder-blue terraces, graphite ink. */
-/* Edge colours are tuned for a dark ground; on white they need weight. */
-.ia-light .ia-edge-line { stroke: color-mix(in srgb, var(--edge-c, #96a0b5) 72%, #1b2432); }
-.ia-light .ia-edge-head { fill: color-mix(in srgb, var(--edge-c, #96a0b5) 72%, #1b2432); }
-.ia-light .ia-packet-halo { opacity: 0.45; }
-.ia-light .ia-chip-text { filter: brightness(0.82); }
-.ia-light .ia-plat-grid { stroke-opacity: 0.9; }
-
+/* Light theme only tunes the things that genuinely differ: shadows and the glow.
+   Bodies, ink and halos already derive from --card/--foreground. */
 .ia-root.ia-light {
-  --ia-void: #eef2f8;
-  --ia-void-glow: rgba(255, 255, 255, 0.95);
-  --ia-mat: #c8d2e2;
-  --ia-shade-top: #ffffff;
-  --ia-shade-side: #5f6b7e;
-  --ia-plat-0: #c6ccd9;
-  --ia-plat-1: #bfc8dc;
-  --ia-plat-2: #c9c5e0;
-  --ia-plat-3: #bcd4ce;
-  --ia-ink: #232b3a;
-  --ia-ink-muted: #4b5568;
-  --ia-halo: rgba(255, 255, 255, 0.94);
-  --ia-halo-soft: rgba(255, 255, 255, 0.8);
-  --ia-grid: rgba(38, 58, 96, 0.2);
-  --ia-plat-edge: rgba(38, 58, 96, 0.24);
-  --ia-detail: rgba(255, 255, 255, 0.7);
-  --ia-groove: rgba(35, 52, 86, 0.3);
-  --ia-shadow: rgba(40, 60, 100, 0.18);
+  --ia-void: color-mix(in srgb, var(--card, #ffffff) 97%, var(--foreground, #1b2432) 3%);
+  --ia-void-glow: color-mix(in srgb, var(--foreground, #1b2432) 4%, transparent);
+  --ia-mat: color-mix(in srgb, var(--card, #ffffff) 74%, var(--foreground, #1b2432) 26%);
+  --ia-shade-side: color-mix(in srgb, var(--foreground, #1b2432) 70%, var(--card, #ffffff));
+  --ia-shadow: rgba(20, 32, 54, 0.18);
+  --ia-groove: rgba(20, 32, 54, 0.28);
 }
 
 .ia-glass {
-  background: color-mix(in srgb, var(--ui-bg-secondary, #0f1523) 84%, transparent);
+  background: color-mix(in srgb, var(--card, var(--ui-bg-secondary, #0f1523)) 86%, transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.14));
   box-shadow: 0 10px 30px -6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
@@ -3223,7 +3240,7 @@ const CSS = `
   border-radius: 999px;
   font-size: 10.5px;
   letter-spacing: 0.01em;
-  color: var(--ui-text-tertiary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-tertiary, #94a3b8));
   background: color-mix(in srgb, var(--ia-void, #080c16) 72%, transparent);
   border: 1px solid rgba(148, 163, 184, 0.16);
   pointer-events: none;
@@ -3258,8 +3275,8 @@ const CSS = `
 .ia-mark-left { fill: #0284c7; }
 .ia-mark-right { fill: #0369a1; }
 .ia-brand-text { display: flex; flex-direction: column; gap: 0; white-space: nowrap; }
-.ia-brand-title { font-weight: 600; font-size: 12.5px; letter-spacing: -0.01em; color: var(--ui-text-primary, #f1f5f9); line-height: 1.15; }
-.ia-brand-meta { font-size: 10px; color: var(--ui-text-quaternary, #64748b); font-variant-numeric: tabular-nums; line-height: 1.15; }
+.ia-brand-title { font-weight: 600; font-size: 12.5px; letter-spacing: -0.01em; color: var(--foreground, var(--ui-text-primary, #f1f5f9)); line-height: 1.15; }
+.ia-brand-meta { font-size: 10px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); font-variant-numeric: tabular-nums; line-height: 1.15; }
 
 /* ── segmented filter pills ──────────────────────────────────────────────── */
 .ia-seg {
@@ -3280,29 +3297,29 @@ const CSS = `
   border-radius: 6px;
   border: none;
   background: transparent;
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.ia-seg-btn:hover { color: var(--ui-text-primary, #f1f5f9); background: rgba(255, 255, 255, 0.04); }
+.ia-seg-btn:hover { color: var(--foreground, var(--ui-text-primary, #f1f5f9)); background: rgba(255, 255, 255, 0.04); }
 .ia-seg-active {
-  background: rgba(56, 189, 248, 0.14);
-  color: #e0f2fe;
+  background: rgba(56, 189, 248, 0.16);
+  color: color-mix(in srgb, var(--accent, #38bdf8) 62%, var(--foreground, #e2e8f0));
   box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.32);
 }
 .ia-seg-warn .ia-seg-count {
-  background: rgba(245, 158, 11, 0.2);
-  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.22);
+  color: color-mix(in srgb, #f59e0b 62%, var(--foreground, #e2e8f0));
 }
 .ia-seg-count {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.12);
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   font-variant-numeric: tabular-nums;
 }
 
@@ -3321,14 +3338,14 @@ const CSS = `
   position: absolute;
   left: 9px;
   font-size: 12px;
-  color: var(--ui-text-quaternary, #64748b);
+  color: var(--muted-foreground, var(--ui-text-quaternary, #64748b));
   pointer-events: none;
 }
 .ia-search {
   background: rgba(15, 23, 42, 0.55);
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 8px;
-  color: var(--ui-text-primary, #f1f5f9);
+  color: var(--foreground, var(--ui-text-primary, #f1f5f9));
   padding: 5px 20px 5px 24px;
   font-size: 11px;
   width: 116px;
@@ -3339,18 +3356,18 @@ const CSS = `
   border-color: rgba(56, 189, 248, 0.55);
   width: 148px;
 }
-.ia-search::placeholder { color: var(--ui-text-quaternary, #64748b); }
+.ia-search::placeholder { color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); }
 .ia-search-clear {
   position: absolute;
   right: 6px;
   border: none;
   background: transparent;
-  color: var(--ui-text-quaternary, #64748b);
+  color: var(--muted-foreground, var(--ui-text-quaternary, #64748b));
   font-size: 10px;
   cursor: pointer;
   padding: 2px 4px;
 }
-.ia-search-clear:hover { color: var(--ui-text-primary, #f1f5f9); }
+.ia-search-clear:hover { color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
 
 /* ── buttons & badges ────────────────────────────────────────────────────── */
 .ia-btn {
@@ -3365,7 +3382,7 @@ const CSS = `
   cursor: pointer;
   border: 1px solid rgba(148, 163, 184, 0.16);
   background: rgba(30, 41, 59, 0.65);
-  color: var(--ui-text-primary, #e2e8f0);
+  color: var(--foreground, var(--ui-text-primary, #e2e8f0));
   white-space: nowrap;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
@@ -3402,13 +3419,13 @@ const CSS = `
 .ia-icon-btn {
   border: none;
   background: transparent;
-  color: var(--ui-text-quaternary, #64748b);
+  color: var(--muted-foreground, var(--ui-text-quaternary, #64748b));
   cursor: pointer;
   padding: 4px 6px;
   border-radius: 6px;
   font-size: 12px;
 }
-.ia-icon-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--ui-text-primary, #f1f5f9); }
+.ia-icon-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
 
 .ia-dot {
   width: 7px;
@@ -3431,17 +3448,17 @@ const CSS = `
   background: rgba(15, 23, 42, 0.5);
 }
 .ia-badge-neutral {
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   border-color: rgba(148, 163, 184, 0.18);
   text-transform: none;
 }
 .ia-badge-danger {
-  color: #fca5a5;
+  color: color-mix(in srgb, #ef4444 58%, var(--foreground, #e2e8f0));
   border-color: rgba(239, 68, 68, 0.45);
   background: rgba(239, 68, 68, 0.12);
 }
 .ia-badge-retired {
-  color: var(--ui-text-tertiary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-tertiary, #94a3b8));
   border-color: rgba(148, 163, 184, 0.28);
   background: rgba(148, 163, 184, 0.08);
   text-transform: none;
@@ -3463,10 +3480,10 @@ const CSS = `
   flex-direction: column;
   gap: 8px;
 }
-.ia-pop-title { font-size: 11px; font-weight: 600; color: var(--ui-text-primary, #f1f5f9); }
-.ia-pop-desc { font-size: 11px; color: var(--ui-text-secondary, #94a3b8); line-height: 1.4; }
+.ia-pop-title { font-size: 11px; font-weight: 600; color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
+.ia-pop-desc { font-size: 11px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); line-height: 1.4; }
 .ia-pop-sep { height: 1px; background: rgba(148, 163, 184, 0.12); margin: 2px 0; }
-.ia-pop-foot { font-size: 10px; color: var(--ui-text-quaternary, #64748b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ia-pop-foot { font-size: 10px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ia-choice-row { display: flex; gap: 4px; }
 .ia-choice {
   flex: 1 1 0;
@@ -3474,17 +3491,17 @@ const CSS = `
   border-radius: 6px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   background: rgba(15, 23, 42, 0.55);
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   font-size: 11px;
   font-weight: 500;
   text-transform: capitalize;
   cursor: pointer;
 }
-.ia-choice:hover { color: var(--ui-text-primary, #f1f5f9); }
+.ia-choice:hover { color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
 .ia-choice-on {
   background: rgba(56, 189, 248, 0.16);
   border-color: rgba(56, 189, 248, 0.5);
-  color: #e0f2fe;
+  color: color-mix(in srgb, var(--accent, #38bdf8) 62%, var(--foreground, #e2e8f0));
 }
 
 /* ── floating incident banner ────────────────────────────────────────────── */
@@ -3499,7 +3516,7 @@ const CSS = `
   padding: 7px 12px;
   border-radius: 10px;
   border-color: rgba(239, 68, 68, 0.45);
-  background: color-mix(in srgb, rgba(127, 29, 29, 0.65) 75%, var(--ui-bg-secondary, #0f1523));
+  background: color-mix(in srgb, rgba(127, 29, 29, 0.65) 75%, var(--card, var(--ui-bg-secondary, #0f1523)));
   max-width: min(520px, calc(100% - 32px));
 }
 .ia-incident-shifted {
@@ -3516,7 +3533,7 @@ const CSS = `
 }
 .ia-incident-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ia-incident-line { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.ia-incident-err { font-size: 11px; color: #fecaca; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ia-incident-err { font-size: 11px; color: color-mix(in srgb, #ef4444 55%, var(--foreground, #e2e8f0)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ia-incident-btns { display: flex; gap: 6px; margin-left: 8px; }
 
 /* ── bottom-left activity dock ───────────────────────────────────────────── */
@@ -3536,15 +3553,15 @@ const CSS = `
   gap: 8px;
   padding: 6px 12px;
   border-radius: 999px;
-  color: var(--ui-text-primary, #e2e8f0);
+  color: var(--foreground, var(--ui-text-primary, #e2e8f0));
   font-size: 11.5px;
   max-width: 270px;
   cursor: pointer;
 }
 .ia-activity-pill:hover { border-color: rgba(148, 163, 184, 0.3); }
 .ia-activity-pill-label { font-weight: 600; flex: 0 0 auto; }
-.ia-activity-peek { color: var(--ui-text-secondary, #94a3b8); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.ia-peek-danger { color: #fca5a5; }
+.ia-activity-peek { color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ia-peek-danger { color: color-mix(in srgb, #ef4444 58%, var(--foreground, #e2e8f0)); }
 .ia-live-dot {
   width: 7px;
   height: 7px;
@@ -3599,14 +3616,14 @@ const CSS = `
   padding: 1px 6px;
   border-radius: 4px;
   background: rgba(148, 163, 184, 0.15);
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   flex: 0 0 auto;
 }
-.ia-act-touch_blocked .ia-activity-badge { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+.ia-act-touch_blocked .ia-activity-badge { background: rgba(239, 68, 68, 0.22); color: color-mix(in srgb, #ef4444 58%, var(--foreground, #e2e8f0)); }
 .ia-act-touch_allowed .ia-activity-badge { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
 .ia-act-read_doc .ia-activity-badge { background: rgba(6, 182, 212, 0.2); color: #67e8f9; }
 .ia-activity-summary { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ia-activity-time { flex: 0 0 auto; font-size: 10px; color: var(--ui-text-quaternary, #64748b); font-variant-numeric: tabular-nums; }
+.ia-activity-time { flex: 0 0 auto; font-size: 10px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); font-variant-numeric: tabular-nums; }
 
 /* ── bottom-right map controls & legend ──────────────────────────────────── */
 .ia-map-dock {
@@ -3630,14 +3647,14 @@ const CSS = `
 .ia-map-btn {
   border: none;
   background: transparent;
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   padding: 4px 9px;
   border-radius: 7px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
 }
-.ia-map-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--ui-text-primary, #f1f5f9); }
+.ia-map-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
 .ia-map-pct { font-size: 10.5px; font-variant-numeric: tabular-nums; min-width: 44px; }
 .ia-map-legend { font-size: 11px; font-weight: 500; }
 .ia-map-sep { width: 1px; height: 16px; background: rgba(148, 163, 184, 0.16); margin: 0 2px; }
@@ -3651,10 +3668,10 @@ const CSS = `
   gap: 8px;
 }
 .ia-legend-head { display: flex; align-items: center; justify-content: space-between; }
-.ia-legend-sub { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ui-text-quaternary, #64748b); }
+.ia-legend-sub { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); }
 .ia-legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
-.ia-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ui-text-secondary, #94a3b8); white-space: nowrap; }
-.ia-legend-note { font-size: 10px; color: var(--ui-text-quaternary, #64748b); line-height: 1.35; padding-top: 2px; border-top: 1px solid rgba(148, 163, 184, 0.12); }
+.ia-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); white-space: nowrap; }
+.ia-legend-note { font-size: 10px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); line-height: 1.35; padding-top: 2px; border-top: 1px solid rgba(148, 163, 184, 0.12); }
 
 /* ── slide-over node inspector drawer ────────────────────────────────────── */
 .ia-drawer {
@@ -3695,8 +3712,8 @@ const CSS = `
   flex: 0 0 32px;
 }
 .ia-drawer-titles { flex: 1 1 auto; min-width: 0; }
-.ia-drawer-title { font-size: 14px; font-weight: 600; color: var(--ui-text-primary, #f8fafc); line-height: 1.25; word-break: break-word; }
-.ia-drawer-sub { font-size: 11px; color: var(--ui-text-quaternary, #64748b); margin-top: 2px; }
+.ia-drawer-title { font-size: 14px; font-weight: 600; color: var(--foreground, var(--ui-text-primary, #f8fafc)); line-height: 1.25; word-break: break-word; }
+.ia-drawer-sub { font-size: 11px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); margin-top: 2px; }
 .ia-badges { display: flex; gap: 6px; flex-wrap: wrap; }
 .ia-drawer-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
@@ -3713,15 +3730,15 @@ const CSS = `
   border-radius: 6px;
   border: none;
   background: transparent;
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
 }
-.ia-dtab:hover { color: var(--ui-text-primary, #f1f5f9); }
+.ia-dtab:hover { color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
 .ia-dtab-active {
-  background: rgba(56, 189, 248, 0.14);
-  color: #e0f2fe;
+  background: rgba(56, 189, 248, 0.16);
+  color: color-mix(in srgb, var(--accent, #38bdf8) 62%, var(--foreground, #e2e8f0));
   box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.3);
 }
 
@@ -3743,7 +3760,7 @@ const CSS = `
 
 .ia-section { display: flex; flex-direction: column; gap: 8px; }
 .ia-section-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ia-section-title { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ui-text-quaternary, #64748b); }
+.ia-section-title { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); }
 .ia-section-foot { padding-top: 4px; border-top: 1px solid rgba(148, 163, 184, 0.1); }
 
 .ia-callout {
@@ -3757,14 +3774,14 @@ const CSS = `
   background: rgba(245, 158, 11, 0.1);
   border: 1px solid rgba(245, 158, 11, 0.32);
 }
-.ia-callout-title { font-size: 10.5px; font-weight: 600; color: #fcd34d; }
-.ia-callout-body { font-size: 11.5px; color: #fef3c7; line-height: 1.45; }
+.ia-callout-title { font-size: 10.5px; font-weight: 600; color: color-mix(in srgb, #f59e0b 62%, var(--foreground, #e2e8f0)); }
+.ia-callout-body { font-size: 11.5px; color: var(--foreground, #e2e8f0); line-height: 1.45; }
 .ia-callout-muted {
   background: rgba(148, 163, 184, 0.07);
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
-.ia-callout-muted .ia-callout-title { color: var(--ui-text-secondary, #cbd5e1); }
-.ia-callout-muted .ia-callout-body { color: var(--ui-text-secondary, #94a3b8); }
+.ia-callout-muted .ia-callout-title { color: var(--muted-foreground, var(--ui-text-secondary, #cbd5e1)); }
+.ia-callout-muted .ia-callout-body { color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
 
 .ia-prop-grid {
   display: grid;
@@ -3778,11 +3795,11 @@ const CSS = `
   border: 1px solid rgba(148, 163, 184, 0.1);
   min-width: 0;
 }
-.ia-prop-label { font-size: 9.5px; color: var(--ui-text-quaternary, #64748b); text-transform: uppercase; letter-spacing: 0.04em; }
-.ia-prop-val { font-size: 11.5px; font-weight: 500; color: var(--ui-text-primary, #e2e8f0); margin-top: 2px; overflow-wrap: anywhere; }
+.ia-prop-label { font-size: 9.5px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); text-transform: uppercase; letter-spacing: 0.04em; }
+.ia-prop-val { font-size: 11.5px; font-weight: 500; color: var(--foreground, var(--ui-text-primary, #e2e8f0)); margin-top: 2px; overflow-wrap: anywhere; }
 
 .ia-blast-group { display: flex; flex-direction: column; gap: 5px; }
-.ia-blast-label { font-size: 10.5px; color: var(--ui-text-secondary, #94a3b8); }
+.ia-blast-label { font-size: 10.5px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
 .ia-chip-list { display: flex; flex-wrap: wrap; gap: 5px; }
 .ia-node-chip {
   display: inline-flex;
@@ -3792,7 +3809,7 @@ const CSS = `
   border-radius: 7px;
   background: rgba(15, 23, 42, 0.55);
   border: 1px solid rgba(148, 163, 184, 0.16);
-  color: var(--ui-text-primary, #e2e8f0);
+  color: var(--foreground, var(--ui-text-primary, #e2e8f0));
   font-size: 11px;
   cursor: pointer;
 }
@@ -3805,8 +3822,8 @@ const CSS = `
   background: rgba(15, 23, 42, 0.45);
   border: 1px solid rgba(148, 163, 184, 0.1);
 }
-.ia-metric-val { font-size: 15px; font-weight: 700; color: var(--ui-text-primary, #f8fafc); font-variant-numeric: tabular-nums; }
-.ia-metric-lbl { font-size: 9.5px; color: var(--ui-text-quaternary, #64748b); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.ia-metric-val { font-size: 15px; font-weight: 700; color: var(--foreground, var(--ui-text-primary, #f8fafc)); font-variant-numeric: tabular-nums; }
+.ia-metric-lbl { font-size: 9.5px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 
 .ia-spark {
   display: flex;
@@ -3832,13 +3849,13 @@ const CSS = `
   gap: 3px;
 }
 .ia-inc-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; }
-.ia-inc-card-err { font-size: 11px; color: #fca5a5; }
-.ia-inc-card-res { font-size: 11px; color: var(--ui-text-secondary, #94a3b8); }
+.ia-inc-card-err { font-size: 11px; color: color-mix(in srgb, #ef4444 58%, var(--foreground, #e2e8f0)); }
+.ia-inc-card-res { font-size: 11px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
 
 .ia-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.ia-table th { text-align: left; font-weight: 600; font-size: 9.5px; text-transform: uppercase; color: var(--ui-text-quaternary, #64748b); padding: 4px 6px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
+.ia-table th { text-align: left; font-weight: 600; font-size: 9.5px; text-transform: uppercase; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); padding: 4px 6px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
 .ia-table td { padding: 5px 6px; border-top: 1px solid rgba(148, 163, 184, 0.08); vertical-align: top; overflow-wrap: anywhere; }
-.ia-td-key { font-weight: 500; color: var(--ui-text-secondary, #94a3b8); }
+.ia-td-key { font-weight: 500; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
 .ia-td-live { color: #7dd3fc; }
 
 .ia-runbook {
@@ -3851,7 +3868,7 @@ const CSS = `
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--ui-text-primary, #e2e8f0);
+  color: var(--foreground, var(--ui-text-primary, #e2e8f0));
 }
 .ia-json { font-size: 10px; }
 
@@ -3865,25 +3882,25 @@ const CSS = `
 }
 .ia-link-btn:hover { text-decoration: underline; }
 
-.ia-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--ui-text-secondary, #94a3b8); }
-.ia-muted { color: var(--ui-text-quaternary, #64748b); font-size: 11px; }
+.ia-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
+.ia-muted { color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); font-size: 11px; }
 .ia-pad { padding: 12px; }
 .ia-row { display: flex; gap: 6px; flex-wrap: wrap; }
-.ia-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; text-align: center; color: var(--ui-text-quaternary, #64748b); }
+.ia-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; text-align: center; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); }
 .ia-empty-box { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 320px; }
-.ia-empty-title { font-size: 13px; font-weight: 600; color: var(--ui-text-primary, #e2e8f0); }
+.ia-empty-title { font-size: 13px; font-weight: 600; color: var(--foreground, var(--ui-text-primary, #e2e8f0)); }
 
 /* ── status bar chip & inline cards ──────────────────────────────────────── */
 .ia-chip {
   font-size: 11px;
   padding: 1px 9px;
   border-radius: 999px;
-  color: var(--ui-text-secondary, #94a3b8);
+  color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   background: rgba(15, 23, 42, 0.65);
   border: 1px solid rgba(148, 163, 184, 0.22);
   cursor: pointer;
 }
-.ia-chip:hover { color: var(--ui-text-primary, #f1f5f9); }
+.ia-chip:hover { color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
 .ia-chip-alert { color: #fca5a5; border-color: rgba(239, 68, 68, 0.5); }
 .ia-chip-blocked { color: #fca5a5; animation: ia-chip-flash 0.9s ease-in-out 4; }
 @keyframes ia-chip-flash { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -3897,17 +3914,19 @@ const CSS = `
   font-size: 11.5px;
 }
 .ia-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ia-card-sub { color: var(--ui-text-quaternary, #64748b); font-size: 11px; }
+.ia-card-sub { color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); font-size: 11px; }
 
 /* ── isometric scene (untouched 3D diorama styling) ──────────────────────── */
 .ia-plat { animation: ia-rise 0.7s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
 .ia-plat-top { fill: color-mix(in srgb, var(--plat, #333a4a) 92%, var(--ia-shade-top, #ffffff)); }
 .ia-plat-left { fill: color-mix(in srgb, var(--plat, #333a4a) 68%, var(--ia-shade-side, #000000)); }
 .ia-plat-right { fill: color-mix(in srgb, var(--plat, #333a4a) 44%, var(--ia-shade-side, #000000)); }
-.ia-plat-0 { --plat: var(--ia-plat-0, #3d3a47); }
-.ia-plat-1 { --plat: var(--ia-plat-1, #353c50); }
-.ia-plat-2 { --plat: var(--ia-plat-2, #3b3550); }
-.ia-plat-3 { --plat: var(--ia-plat-3, #2f4744); }
+/* Tier tints ride on the theme-derived body colour, so a light theme gets light
+   terraces (and dark ink stays readable) without a second palette. */
+.ia-plat-0 { --plat: color-mix(in srgb, var(--ia-mat, #3d3a47) 93%, #8b7bd8 7%); }
+.ia-plat-1 { --plat: color-mix(in srgb, var(--ia-mat, #353c50) 93%, #4f8fd8 7%); }
+.ia-plat-2 { --plat: color-mix(in srgb, var(--ia-mat, #3b3550) 93%, #b06bd0 7%); }
+.ia-plat-3 { --plat: color-mix(in srgb, var(--ia-mat, #2f4744) 93%, #3fb6a8 7%); }
 .ia-plat-riser { fill: color-mix(in srgb, var(--plat, #333a4a) 34%, var(--ia-shade-side, #000000)); }
 .ia-plat-grid { fill: none; stroke: var(--ia-grid, rgba(190, 205, 235, 0.13)); stroke-width: 1; }
 .ia-plat-edge { fill: none; stroke: var(--ia-plat-edge, rgba(220, 235, 255, 0.16)); stroke-width: 1.1; }
@@ -3924,7 +3943,7 @@ const CSS = `
 .ia-packet-halo { fill: none; stroke: var(--edge-c, #96a0b5); stroke-width: 1; opacity: 0.45; }
 .ia-burst circle { fill: var(--ui-danger, #ef4444); opacity: 0; animation: ia-burst-fade 1.7s ease-out 3; }
 
-.ia-node { cursor: pointer; }
+.ia-node { cursor: pointer; --mat: color-mix(in srgb, var(--ia-mat, #454c5e) 86%, var(--acc, #8892a6) 14%); }
 
 /* Inference server: spinning fans and a heat shimmer. */
 .ia-fan-blades { transform-box: view-box; transform-origin: 0 0; animation: ia-spin 2.6s linear infinite; }
@@ -3953,7 +3972,7 @@ const CSS = `
 .ia-groove { stroke: var(--ia-groove, rgba(0, 0, 0, 0.34)); stroke-width: 1; fill: none; }
 .ia-shadow { fill: var(--ia-shadow, rgba(3, 6, 14, 0.42)); }
 .ia-dglow { opacity: 0.26; animation: ia-glowp 3s ease-in-out infinite; }
-.ia-sel-ring { fill: color-mix(in srgb, var(--ui-accent, #38bdf8) 12%, transparent); stroke: var(--ui-accent, #38bdf8); stroke-width: 1.5; stroke-dasharray: 7 5; animation: ia-ants 1.1s linear infinite; }
+.ia-sel-ring { fill: color-mix(in srgb, var(--accent, var(--ui-accent, #38bdf8)) 12%, transparent); stroke: var(--accent, var(--ui-accent, #38bdf8)); stroke-width: 1.5; stroke-dasharray: 7 5; animation: ia-ants 1.1s linear infinite; }
 .ia-node-title { font-size: 10px; font-weight: 600; fill: var(--ui-text-primary, var(--ia-ink, currentColor)); paint-order: stroke; stroke: var(--ia-halo, rgba(8, 10, 16, 0.92)); stroke-width: 3.4px; stroke-linejoin: round; transition: opacity 0.15s ease; }
 .ia-node-compact .ia-node-title { opacity: 0; pointer-events: none; }
 .ia-node-compact:hover .ia-node-title { opacity: 1; }
