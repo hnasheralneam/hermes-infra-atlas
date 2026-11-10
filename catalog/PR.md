@@ -3,12 +3,12 @@
 Copy `catalog/infra-atlas.yaml` to `plugin-catalog/infra-atlas.yaml` in a branch of
 `NousResearch/hermes-agent`, open the PR, and paste the description below.
 
-Pinned commit: `2b462f4e450ab7caabf8f0abeef3f8a3cad290c9` (repo `main`).
+Pinned commit: `afd7915380b159f57b121180dbac6fc8cacb6f02` (repo `main`).
 Re-run the pre-submit gate against that exact checkout first:
 
 ```bash
 git clone https://github.com/hnasheralneam/hermes-infra-atlas /tmp/ia && cd /tmp/ia
-git checkout 2b462f4e450ab7caabf8f0abeef3f8a3cad290c9
+git checkout afd7915380b159f57b121180dbac6fc8cacb6f02
 hermes plugins validate . --install-deps   # passes locally today
 ```
 
