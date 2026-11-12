@@ -46,7 +46,30 @@ def _ports(value: Any) -> list[str]:
     return []
 
 
-def _field_diffs(doc: dict[str, Any], live: dict[str, Any]) -> list[dict[str, Any]]:
+_COMPATIBLE_MANAGERS = (
+    {"host", "proxmox"},
+    {"docker", "docker-compose", "compose", "podman"},
+    {"systemd", "systemd-system"},
+)
+_GUEST_IN_VM_MANAGERS = {"systemd", "systemd-system", "systemd-user", "docker", "docker-compose", "compose", "podman"}
+
+
+def compatible_managed_by(doc_value: Any, live_value: Any, kind: str = "") -> bool:
+    left = str(doc_value or "").strip().lower()
+    right = str(live_value or "").strip().lower()
+    if left == right:
+        return True
+    pair = {left, right}
+    if any(pair <= group for group in _COMPATIBLE_MANAGERS):
+        return True
+    # Proxmox reports every VM/LXC as managed_by="proxmox", while the guest's
+    # registry entry often names the service manager inside the guest.
+    if right == "proxmox" and left in _GUEST_IN_VM_MANAGERS and kind in {"vm", "lxc", "server", ""}:
+        return True
+    return False
+
+
+def _field_diffs(doc: dict[str, Any], live: dict[str, Any], kind: str = "") -> list[dict[str, Any]]:
     diffs: list[dict[str, Any]] = []
     for field in DRIFT_FIELDS:
         if field == "health_status":
@@ -60,7 +83,7 @@ def _field_diffs(doc: dict[str, Any], live: dict[str, Any]) -> list[dict[str, An
             continue
         if doc_value in (None, "", []) or live_value in (None, "", []):
             continue
-        if field == "managed_by" and {str(doc_value).strip().lower(), str(live_value).strip().lower()} <= {"host", "proxmox"}:
+        if field == "managed_by" and compatible_managed_by(doc_value, live_value, kind):
             continue
         if str(doc_value).strip().lower() != str(live_value).strip().lower():
             diffs.append({"field": field, "doc": doc_value, "live": live_value})
@@ -170,11 +193,17 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
         if target_id is None and live_kind == "peer" and live.get("label"):
             peer_slug = _slug(str(live["label"]))
             for candidate, doc in by_id.items():
+                if str(doc.get("kind")) not in DOC_KINDS:
+                    continue
                 doc_slug = _slug(str(doc.get("label") or ""))
-                if str(doc.get("kind")) in DOC_KINDS and (
+                stem_slug = _slug(str(doc.get("registry_path") or "").rsplit("/", 1)[-1].removesuffix(".md"))
+                alias_slugs = {_slug(a) for a in (doc.get("aliases") or []) if a}
+                if (
                     doc_slug == peer_slug
+                    or stem_slug == peer_slug
+                    or peer_slug in alias_slugs
                     or candidate.endswith(f"-{peer_slug}")
-                    or (peer_slug == "ldap" and doc_slug == "openldap")
+                    or (peer_slug == "ldap" and (stem_slug == "openldap" or doc_slug == "openldap"))
                     or (peer_slug == "tezcatlipoca-dash" and "tezcatlipoca-dashboard" in doc_slug)
                 ):
                     target_id = candidate
@@ -258,7 +287,7 @@ def _correlate(doc_nodes: list[dict[str, Any]], live_nodes: list[dict[str, Any]]
 def _classify(node: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]]]:
     """Return ``(drift_status, reasons, field_diffs)``."""
     live = node.get("_live") or {}
-    diff = _field_diffs(node.get("doc_state") or node, live) if live else []
+    diff = _field_diffs(node.get("doc_state") or node, live, str(node.get("kind") or "")) if live else []
     reasons = [f"{d['field']}: registry says {d['doc']}, live is {d['live']}" for d in diff]
     health = str(node.get("health_status") or "unknown")
 
@@ -570,6 +599,12 @@ def run_sweep(
     except Exception:
         logger.warning("infra-atlas: uptime evaluation failed", exc_info=True)
 
+    retention: dict[str, int] = {}
+    try:
+        retention = store.prune_history(int(plugin_config.setting("history_retention_days") or 90))
+    except Exception:
+        logger.debug("infra-atlas: history prune failed", exc_info=True)
+
     return {
         "sweep_id": sweep_id,
         "duration_ms": int((time.monotonic() - started) * 1000),
@@ -582,6 +617,7 @@ def run_sweep(
             if node["drift_status"] != "matched"
         ],
         "incidents": incidents,
+        "retention": retention,
     }
 
 
@@ -608,11 +644,11 @@ def blast_radius(store, node_id: str, depth: int = 3) -> dict[str, Any]:
         next_down = {
             edge["target_id"]
             for edge in edges
-            if edge["source_id"] in frontier and edge["relation"] in {"hosts", "proxies_to", "monitors"}
+            if edge["source_id"] in frontier and edge["relation"] in {"hosts", "proxies_to"}
         } | {
             edge["source_id"]
             for edge in edges
-            if edge["target_id"] in frontier and edge["relation"] in {"depends_on", "uses_model", "routes_via"}
+            if edge["target_id"] in frontier and edge["relation"] in {"depends_on", "uses_model", "routes_via", "monitors"}
         }
         frontier = next_down - {node_id} - downstream
         downstream |= frontier

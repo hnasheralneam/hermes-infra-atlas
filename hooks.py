@@ -97,7 +97,7 @@ _REGISTRY_WRITE_PREFIX = "[Infra Atlas — Registry Write Gate]"
 #: the exact call to make instead of guessing at a workaround.
 _REGISTRY_WRITE_ROUTE = (
     "Write the registry through `infra_upsert(node_id=…, reason=…, markdown_body=…)` — it merges "
-    "frontmatter, refreshes INDEX.md, prepends the change-log entry and bumps verified_at in one "
+    "frontmatter, refreshes INDEX.md, records the write in the activity ledger and bumps verified_at in one "
     "atomic write. Credential values go to `infra_credentials(action=\"set\", …)`, never into an entry."
 )
 
@@ -150,7 +150,7 @@ def _registry_write_veto(
 
     The knowledge base is deliberately open — this gate does not protect it from
     change, it protects the *route*. A hand-edit skips frontmatter merging, the
-    INDEX refresh, the change-log entry and the ``verified_at`` bump, so the
+    INDEX refresh, the ledger record and the ``verified_at`` bump, so the
     plugin's node table drifts from the files it claims to describe.
     """
     try:
@@ -193,7 +193,7 @@ def _registry_write_veto(
             f"{_REGISTRY_WRITE_ROUTE} "
             "The registry is open to edits — this gate only enforces the route, so the plugin's "
             "node table and the files stay in step. Files the tool does not own "
-            "(plans/, conventions.md, LIVE-STATE.md, tracker files) remain hand-editable."
+            "(conventions.md, LIVE-STATE.md, tracker files) remain hand-editable."
         )
         _enqueue_activity(
             session,

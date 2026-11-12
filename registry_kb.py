@@ -622,12 +622,15 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 def prepend_change_log(root: Path, heading: str, bullets: list[str]) -> None:
-    """Insert one entry at the top of ``change-log.md`` (below the H1 when present)."""
+    """Insert one entry at the top of ``change-log.md`` (below the H1 when present).
+
+    The change-log file was retired 2026-11-12 in favour of the activity ledger;
+    this stays for registries that still carry one but never (re)creates it.
+    """
     root = Path(root)
     path = root / "change-log.md"
     entry = f"\n## {heading}\n" + "\n".join(f"- {line}" for line in bullets) + "\n"
     if not path.exists():
-        _atomic_write(path, "# Infrastructure change log\n" + entry)
         return
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines(keepends=True)
@@ -711,7 +714,7 @@ def upsert_entry(
     create_body: str = "",
     replace_body: bool = False,
 ) -> dict[str, Any]:
-    """Create/merge one registry entry, refresh INDEX.md and prepend a change-log entry.
+    """Create/merge one registry entry, refresh INDEX.md; history lands in the activity ledger.
 
     ``body_append`` extends the runbook. ``replace_body`` (explicit opt-in) swaps the
     body wholesale — the only way to shorten or restructure a runbook, which the

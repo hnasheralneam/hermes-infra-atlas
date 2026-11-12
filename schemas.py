@@ -71,7 +71,7 @@ INFRA_DIFF = {
     "name": "infra_diff",
     "description": (
         "Answer 'what changed?'. Returns drift transitions (registry vs live), uptime incidents, the "
-        "recent change-log entries the graph wrote, and who touched what, over a time window."
+        "registry writes the graph recorded, and who touched what, over a time window."
     ),
     "parameters": {
         "type": "object",
@@ -86,7 +86,7 @@ INFRA_UPSERT = {
     "name": "infra_upsert",
     "description": (
         "Write the knowledge base: create or update a node's Markdown registry entry (frontmatter is merged, "
-        "the runbook prose is preserved), refresh INDEX.md and prepend a change-log entry. Use action "
+        "the runbook prose is preserved), refresh INDEX.md and record the write in the activity ledger. Use action "
         "'adopt_live' to register a node that was discovered running with no entry (drift status "
         "'unregistered'), or 'mark_removed' when a service is gone for good. Call this in the same turn "
         "as any deployment so the docs never drift."
@@ -96,7 +96,7 @@ INFRA_UPSERT = {
         "properties": {
             "node_id": {"type": "string", "description": "Node id to create, update or adopt."},
             "action": {"type": "string", "enum": ["upsert", "adopt_live", "mark_removed"], "default": "upsert"},
-            "reason": {"type": "string", "description": "Why — written to change-log.md. Required."},
+            "reason": {"type": "string", "description": "Why — recorded in the activity ledger. Required."},
             "kind": {"type": "string", "enum": ["server", "service", "project"]},
             "label": {"type": "string"},
             "host_ip": {"type": "string"},
@@ -120,7 +120,7 @@ INFRA_UPSERT = {
             "replace_body": {
                 "type": "boolean",
                 "default": False,
-                "description": "Rewrite the runbook body wholesale instead of appending. The only way to shorten or restructure an entry (appends alone are refused when they would shrink it). The previous body is archived under .rewrites/ and named in the change-log entry.",
+                "description": "Rewrite the runbook body wholesale instead of appending. The only way to shorten or restructure an entry (appends alone are refused when they would shrink it). The previous body is archived under .rewrites/ and recorded in the activity ledger.",
             },
             "status": {"type": "string", "enum": ["active", "removed"]},
         },
@@ -169,7 +169,7 @@ INFRA_INCIDENTS = {
             },
             "incident_id": {"type": "integer"},
             "node_id": {"type": "string"},
-            "summary": {"type": "string", "description": "Cause and fix, appended to change-log.md on resolve/escalate."},
+            "summary": {"type": "string", "description": "Cause and fix, recorded in the activity ledger on resolve/escalate."},
             "interval_min": {"type": "integer", "default": 2, "description": "Watchdog schedule (minutes)."},
             "enabled": {"type": "boolean", "default": True, "description": "setup_watchdog: enable or pause the job."},
         },

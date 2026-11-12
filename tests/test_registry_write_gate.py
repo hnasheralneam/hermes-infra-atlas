@@ -22,7 +22,6 @@ def test_a_direct_entry_write_is_blocked_and_names_the_tool(plugin_home, registr
         ("write_file", {"path": str(registry / "services" / "litellm.md"), "content": "x"}),
         ("patch", {"path": str(registry / "services" / "litellm.md"), "old_string": "a", "new_string": "b"}),
         ("write_file", {"path": str(registry / "INDEX.md"), "content": "x"}),
-        ("write_file", {"path": str(registry / "change-log.md"), "content": "x"}),
         ("write_file", {"path": str(registry / "servers" / "cyber-realm.md"), "content": "x"}),
         ("write_file", {"path": str(registry / "projects" / "app.md"), "content": "x"}),
     ):

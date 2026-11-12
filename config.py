@@ -41,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
     "enable_hermes_collector": True,
     "enable_probes": True,
     "probe_timeout_sec": 1.5,
+    "history_retention_days": 90,
     "proxmox_url": "",
     "proxmox_token_id": "",
     "proxmox_verify_tls": False,

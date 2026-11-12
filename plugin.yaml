@@ -24,7 +24,7 @@ config_schema:
     type: str
     default: ""
     label: "Registry directory"
-    description: "Markdown infrastructure knowledge base (servers/, services/, projects/, INDEX.md, change-log.md). Empty = <profile data dir>/infra-registry."
+    description: "Markdown infrastructure knowledge base (servers/, services/, projects/, INDEX.md). Empty = <profile data dir>/infra-registry."
   credentials_path:
     type: str
     default: ""
@@ -46,7 +46,12 @@ config_schema:
     choices: [block, warn, off]
     default: block
     label: "Registry write gate (single-writer enforcement)"
-    description: "block vetoes a raw write_file/patch/sed on a file infra_upsert owns (services/, servers/, projects/ entries, INDEX.md, change-log.md) and points the agent at infra_upsert. The registry stays open — only the route is enforced. warn logs only. off disables the gate."
+    description: "block vetoes a raw write_file/patch/sed on a file infra_upsert owns (services/, servers/, projects/ entries, INDEX.md) and points the agent at infra_upsert. The registry stays open — only the route is enforced. warn logs only. off disables the gate."
+  history_retention_days:
+    type: int
+    default: 90
+    label: "Audit-trail retention (days)"
+    description: "Rolling window for activity-ledger, drift and sweep rows, pruned at the end of every sweep. Incidents are never pruned; probe samples keep their own 7d/200-per-node window. Change narrative lives permanently in the registry markdown itself."
   auto_heal_mode:
     type: str
     choices: [auto, playbook_only, notify_only, off]

@@ -296,23 +296,27 @@ class AtlasStore:
                 path = self._db_path
                 if not path:
                     raise sqlite3.OperationalError("no database file to open read-only")
-                conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2, check_same_thread=False)
+                conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.45, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
-                conn.execute("PRAGMA busy_timeout=200")
+                conn.execute("PRAGMA busy_timeout=450")
                 self._ro_conn = conn
             return self._ro_conn
 
-    def list_nodes_ro(self) -> list[dict[str, Any]]:
-        """Nodes for hot paths (hooks): never blocks behind a writer, never raises."""
+    def list_nodes_ro_or_none(self) -> Optional[list[dict[str, Any]]]:
+        """Nodes for hot paths, returning ``None`` on transient lock so callers can keep warm caches."""
         try:
             with self._ro_lock:
                 rows = self._readonly_conn().execute("SELECT * FROM nodes").fetchall()
             return [_row_to_node(row) for row in rows]
         except sqlite3.Error as exc:
-            # Fail open: the hook calling this would rather have an empty graph
-            # (nothing to block) than block the agent on a busy database.
-            logging.getLogger(__name__).debug("infra-atlas: read-only node read failed: %s", exc)
-            return []
+            self.ro_fallbacks = getattr(self, "ro_fallbacks", 0) + 1
+            logging.getLogger(__name__).debug("infra-atlas: read-only node read failed (fallback #%d): %s", self.ro_fallbacks, exc)
+            return None
+
+    def list_nodes_ro(self) -> list[dict[str, Any]]:
+        """Nodes for hot paths (hooks): never blocks behind a writer, never raises."""
+        res = self.list_nodes_ro_or_none()
+        return [] if res is None else res
 
     def has_session_read_ro(self, session_id: str, node_id: str) -> Optional[bool]:
         """``None`` when the read could not be answered (the caller fails open)."""
@@ -325,7 +329,9 @@ class AtlasStore:
                     (session_id, node_id),
                 ).fetchone()
             return row is not None
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            self.ro_fallbacks = getattr(self, "ro_fallbacks", 0) + 1
+            logging.getLogger(__name__).debug("infra-atlas: session_reads ro fallback #%d: %s", self.ro_fallbacks, exc)
             return None
 
     def _init_schema(self) -> None:
@@ -387,7 +393,17 @@ class AtlasStore:
             # not survive from an earlier, wrong correlation (a host once "backed" by a
             # same-named unit on another machine kept claiming that unit forever).
             if node.get("registry_path"):
-                for field in ("managed_by", "systemd_unit", "tailnet_ip", "parent_id", "recovery_cmd", "pitfalls_summary", "live_state"):
+                for field in (
+                    "host_ip",
+                    "tailnet_ip",
+                    "vmid",
+                    "managed_by",
+                    "systemd_unit",
+                    "parent_id",
+                    "recovery_cmd",
+                    "pitfalls_summary",
+                    "live_state",
+                ):
                     if field in node and node.get(field) is None:
                         merged[field] = None
             merged["id"] = node_id
@@ -561,12 +577,11 @@ class AtlasStore:
     def purge_fixture_artifacts(self) -> int:
         """Remove any leftover demo-fixture nodes, edges, incidents and samples."""
         with self._lock:
-            rows = self._run("SELECT id, host_ip, live_state_json FROM nodes").fetchall()
+            rows = self._run("SELECT id, live_state_json FROM nodes").fetchall()
             fixture_ids = []
             for row in rows:
                 ls = _json(row["live_state_json"], {})
-                ip = str(row["host_ip"] or "")
-                if ls.get("source") == "fixture" or ip.startswith("10.20."):
+                if ls.get("source") == "fixture":
                     fixture_ids.append(row["id"])
             for node_id in fixture_ids:
                 self._run("DELETE FROM nodes WHERE id = ?", (node_id,))
@@ -793,13 +808,15 @@ class AtlasStore:
         with self._lock:
             row = self._run(
                 "SELECT AVG(uptime_24h_pct) AS avg, COUNT(*) AS nodes FROM nodes "
-                "WHERE uptime_24h_pct IS NOT NULL AND kind != 'peer'"
+                "WHERE uptime_24h_pct IS NOT NULL AND kind != 'peer' "
+                "AND COALESCE(json_extract(doc_state_json, '$.status'), 'active') != 'removed'"
             ).fetchone()
             # Tailnet peers are devices, not fleet: an offline laptop must not
-            # inflate the outage count. Documented nodes are what we own.
+            # inflate the outage count. Documented active nodes are what we own.
             down = self._run(
                 "SELECT COUNT(*) AS n FROM nodes WHERE health_status = 'down' "
-                "AND kind != 'peer' AND registry_path IS NOT NULL AND registry_path != ''"
+                "AND kind != 'peer' AND registry_path IS NOT NULL AND registry_path != '' "
+                "AND COALESCE(json_extract(doc_state_json, '$.status'), 'active') != 'removed'"
             ).fetchone()
         return {
             "avg_uptime_24h_pct": round(float(row["avg"] or 100.0), 2) if row else 100.0,
@@ -818,6 +835,22 @@ class AtlasStore:
                 (int(keep_per_node),),
             )
             self._commit_with_retry()
+
+    def prune_history(self, days: int) -> dict[str, int]:
+        """Rolling retention for the audit trail (the retired change-log's successor).
+
+        Deletes ``activity_ledger`` / ``drift_events`` / ``sweeps`` rows older than
+        ``days``. Incidents are NEVER pruned — they are the durable outage
+        narrative and stay small. Returns per-table delete counts (informational).
+        """
+        cutoff = _now() - max(1, int(days)) * 86400
+        deleted: dict[str, int] = {}
+        with self._lock:
+            for table in ("activity_ledger", "drift_events", "sweeps"):
+                cur = self._run(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+                deleted[table] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            self._commit_with_retry()
+        return deleted
 
     # -- incidents ------------------------------------------------------
     def open_incident(

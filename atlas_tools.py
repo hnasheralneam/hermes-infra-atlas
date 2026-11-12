@@ -230,7 +230,7 @@ def infra_upsert(args: dict[str, Any], session_id: str = "", task_id: str = "", 
         return _json({"error": "node_id is required"})
     reason = str(args.get("reason") or "").strip()
     if not reason:
-        return _json({"error": "reason is required — it is written to change-log.md"})
+        return _json({"error": "reason is required — it is recorded in the activity ledger"})
     action = str(args.get("action") or "upsert")
     session = _session(session_id, task_id)
 
@@ -537,7 +537,7 @@ def infra_credentials(args: dict[str, Any], session_id: str = "", task_id: str =
         if value in (None, ""):
             return _json({"error": "value is required"})
         if not reason:
-            return _json({"error": "reason is required — it is recorded in the activity log and change-log.md"})
+            return _json({"error": "reason is required — it is recorded in the activity ledger"})
         node_id = str(args.get("node_id") or "").strip() or None
         try:
             meta = credential_vault.set_value(
@@ -572,7 +572,7 @@ def infra_credentials(args: dict[str, Any], session_id: str = "", task_id: str =
                 ],
             )
         except Exception:  # noqa: BLE001 - never fail a write because the log is unreadable
-            logger.debug("infra-atlas: change-log write failed for credential set", exc_info=True)
+            logger.debug("infra-atlas: history write failed for credential set", exc_info=True)
         return _json(
             {
                 "ok": True,

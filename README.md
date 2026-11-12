@@ -82,7 +82,7 @@ pitfalls: "Dial 10.0.0.212:4000 directly; the old front was removed."
 ```
 
 `infra_upsert` merges frontmatter and never truncates the prose below it; it also updates
-`INDEX.md` and prepends a `change-log.md` entry.
+`INDEX.md` and records the write in the activity ledger.
 
 `kind` decides which terrace a node lands on, so an entry that sits in `servers/` but is
 really a guest is corrected at parse time: **anything with a `vmid` — or a Proxmox guest with
@@ -101,7 +101,7 @@ the moment they matter.
 | `infra_query` | Read a node (runbook + live diff + uptime + blast radius). Unlocks it for write/terminal use in this session. |
 | `infra_sweep` | Run collectors + probes, recompute drift, evaluate incidents, attempt the safe local heal. |
 | `infra_diff` | What changed, which incidents opened, who touched what — over a window. |
-| `infra_upsert` | Create/update/adopt/remove a registry entry, with change-log. |
+| `infra_upsert` | Create/update/adopt/remove a registry entry; writes hit the activity ledger. |
 | `infra_bootstrap` | Annotate an existing KB, or scaffold one from live discovery. |
 | `infra_incidents` | List/get/heal/resolve/escalate incidents; install the zero-token watchdog. `heal` runs the documented restart **through Hermes' command approval**. |
 | `infra_credentials` | Private credential vault: list, get (gated), set/rotate, remove, and scan the KB for literals. |
@@ -193,7 +193,7 @@ The value lives in a private vault under `$HERMES_HOME/plugin-data/infra-atlas/`
 - `action="list"` returns names, owners and stored/missing status — never values,
 - `action="get"` returns one value, records the read in the activity ledger, and
   refuses unless the node's registry entry was read first,
-- `action="set"` / `"remove"` require a `reason`, write `change-log.md`, and never
+- `action="set"` / `"remove"` require a `reason`, record it in the activity ledger, and never
   echo the value back,
 - `action="scan"` finds credential literals still sitting in the Markdown (masked
   previews only) so they can be migrated into the vault.
@@ -206,7 +206,7 @@ Writes are agent-side only — the vault is never writable over HTTP.
 - **Reads** the registry directory, `$HERMES_HOME/cron/jobs.json`, the Hermes config
   (read-only), `/proc/net/tcp`, and — only when configured — the Proxmox and Headscale
   APIs.
-- **Writes** only inside the registry directory (entry files, `INDEX.md`, `change-log.md`)
+- **Writes** only inside the registry directory (entry files, `INDEX.md`)
   and its own SQLite database under the active profile's `plugin-data/infra-atlas/`.
   Every write path is validated: the node id must match `^[a-z0-9][a-z0-9._-]{0,63}$` and
   the resolved file must stay inside the registry root.
@@ -239,12 +239,12 @@ Writes are agent-side only — the vault is never writable over HTTP.
 The knowledge base is deliberately **open** — it is the club's living runbook, not a
 frozen document. What is enforced is the *route*: the files `infra_upsert` owns must be
 written by `infra_upsert`, because a hand-edit skips frontmatter merging, the `INDEX.md`
-refresh, the change-log entry and the `verified_at` bump, and the node table then drifts
+refresh, the ledger record and the `verified_at` bump, and the node table then drifts
 from the files it claims to describe.
 
 | Setting | Effect |
 |---|---|
-| `registry_write_gate: block` (default) | Veto `write_file` / `patch` / shell writes (`sed -i`, `tee`, `cat >`, `mv`, `rm`, inline `open(…,'w')`) targeting `servers/`, `services/`, `projects/` entries, `INDEX.md` or `change-log.md`. The refusal names `infra_upsert` and `infra_credentials`. |
+| `registry_write_gate: block` (default) | Veto `write_file` / `patch` / shell writes (`sed -i`, `tee`, `cat >`, `mv`, `rm`, inline `open(…,'w')`) targeting `servers/`, `services/`, `projects/` entries or `INDEX.md`. The refusal names `infra_upsert` and `infra_credentials`. |
 | `registry_write_gate: warn` | Record the raw write in the activity ledger and allow it. |
 | `registry_write_gate: off` | No gate. |
 
@@ -263,7 +263,7 @@ alias is caught exactly like the real path.
 
 Appending can only grow an entry, so `replace_body=true` (with the full new text in
 `markdown_body`) is the sanctioned path for a structural rewrite. The previous body is
-written to `.rewrites/<entry>.bak-<timestamp>` first and named in the change-log entry,
+written to `.rewrites/<entry>.bak-<timestamp>` first and recorded in the activity ledger,
 so a bad rewrite is recoverable without git. `replace_body` without a body is refused
 rather than blanking the runbook.
 
@@ -274,7 +274,7 @@ No telemetry, no network calls to anything not configured above.
 ```
 plugin.yaml          manifest (tools, hooks, settings)
 __init__.py          register(ctx)
-registry_kb.py       Markdown ↔ node model, atomic writer, change-log
+registry_kb.py       Markdown ↔ node model, atomic writer, history in the ledger
 credentials.py       private 0600 credential vault + registry literal scanner
 collectors/          local host, Hermes runtime, Proxmox, Headscale, probes
 fusion.py            correlation + drift classification + sweep

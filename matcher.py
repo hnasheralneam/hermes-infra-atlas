@@ -294,19 +294,19 @@ def _command_words(command: str) -> set[str]:
 # --- Registry write gate -----------------------------------------------------
 #
 # The knowledge base is meant to be OPEN — but written through `infra_upsert`,
-# which merges frontmatter, refreshes INDEX.md, prepends the change-log entry and
+# which merges frontmatter, refreshes INDEX.md, records the activity ledger and
 # bumps verified_at. A raw `write_file`/`patch`/`sed -i` on an entry skips all of
 # that and silently forks the registry from the plugin's model of it.
 #
 # So the gate covers exactly the files `infra_upsert` owns and nothing else:
 # entry files under services/, servers/, projects/, plus INDEX.md and
-# change-log.md. Everything else in the tree (plans/, conventions.md,
+# INDEX.md. Everything else in the tree (conventions.md,
 # LIVE-STATE.md, the CCDC channel tracker and its log dir) stays hand-editable —
 # there is no sanctioned tool path for it, and blocking it would just be an
 # obstacle with no exit.
 
 #: Top-level files `infra_upsert` writes.
-REGISTRY_OWNED_FILES = ("INDEX.md", "change-log.md")
+REGISTRY_OWNED_FILES = ("INDEX.md",)
 #: Directories whose ``*.md`` entries `infra_upsert` owns.
 REGISTRY_OWNED_DIRS = ("servers", "services", "projects")
 
