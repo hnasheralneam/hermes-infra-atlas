@@ -76,6 +76,7 @@ class FakeCtx:
         self.settings: dict[str, Any] = {}
         self.dispatched: list[tuple[str, dict]] = []
         self.profile_name = "test"
+        self.reply: str = '{"ok": true}'
 
     # -- registration ---------------------------------------------------
     def register_tool(self, name, toolset, schema, handler, **kwargs):
@@ -107,4 +108,4 @@ class FakeCtx:
 
     def dispatch_tool(self, name, args, **kwargs):
         self.dispatched.append((name, args))
-        return '{"ok": true}'
+        return self.reply

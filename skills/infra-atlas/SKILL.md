@@ -48,9 +48,13 @@ same turn (`reason` is required and becomes the change-log entry). Use
 the runbook prose is preserved.
 
 Useful fields: `probe` (http URL or `tcp://host:port` for uptime),
-`recovery_cmd` (the safe restart used by the deterministic heal),
 `auto_heal_policy` (`auto` | `playbook_only` | `notify_only` | `off`), and
 `pitfalls` (surfaced to the guardrail and to the outage responder).
+
+`recovery_cmd` is **not** writable through `infra_upsert` — it names a command the
+plugin can run, so it is an operator field in the registry entry. If a node needs a
+restart playbook, tell the operator what command to add rather than writing it
+yourself.
 
 ## 4. Credentials live in the vault, never in the registry
 
@@ -60,7 +64,7 @@ backup.
 
 - An entry **references** a credential by name in frontmatter:
   `credentials: [cyberfield-pve-token, cyberfield-root-ssh]`.
-- The value lives in the private vault (`~/.hermes/plugin-data/infra-atlas/credentials.json`,
+- The value lives in the private vault (`<profile data dir>/credentials.json`,
   0600, Fernet-encrypted with a 0600 key beside it) through
   `infra_credentials`:
 

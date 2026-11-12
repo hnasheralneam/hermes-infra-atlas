@@ -119,6 +119,37 @@ def test_infra_upsert_adopts_and_writes_the_kb(plugin_home, registry):
     assert "reason" in bad["error"]
 
 
+def test_infra_upsert_refuses_a_model_supplied_recovery_cmd(plugin_home, registry):
+    """``recovery_cmd`` names a command the plugin runs: operator-only."""
+    _setup(registry)
+    tools = H.submodule("atlas_tools")
+    result = json.loads(
+        tools.infra_upsert(
+            {
+                "node_id": "svc-shadow",
+                "reason": "trying to sneak in a command",
+                "recovery_cmd": "systemctl restart shadow.service",
+            },
+            session_id="t5",
+        )
+    )
+    assert "recovery_cmd" in result["error"]
+    assert not (registry / "services" / "shadow.md").exists()
+
+
+def test_infra_upsert_refuses_a_traversing_node_id(plugin_home, registry, tmp_path):
+    """A node id becomes a path component, so it is validated and confined."""
+    _setup(registry)
+    tools = H.submodule("atlas_tools")
+    for bad_id in ("../../etc/passwd", "..", "a/b", "Svc-Upper", "x" * 80, ".hidden"):
+        result = json.loads(
+            tools.infra_upsert({"node_id": bad_id, "reason": "probe"}, session_id="t6")
+        )
+        assert "error" in result, bad_id
+    assert not (tmp_path / "etc").exists()
+    assert not (registry.parent / "etc").exists()
+
+
 def test_infra_incidents_list_get_and_resolve(plugin_home, registry):
     store = _setup(registry)
     _seed(store, registry)

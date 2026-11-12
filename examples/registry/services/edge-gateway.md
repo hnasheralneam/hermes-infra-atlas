@@ -15,4 +15,5 @@ pitfalls: "Terminate TLS here only; the origin speaks plain HTTP."
 
 # edge-gateway
 
-Example service with a `recovery_cmd`, so the deterministic playbook has something to run.
+Example service with a `recovery_cmd`, so the playbook has something to propose — the restart
+still runs through Hermes' command approval, never silently.

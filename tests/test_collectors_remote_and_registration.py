@@ -238,6 +238,37 @@ def test_register_wires_every_surface(plugin_home):
     assert ctx.blueprints and ctx.blueprints[0][0] == "uptime-watchdog"
 
 
+def test_register_binds_an_approver_that_dispatches_terminal(plugin_home):
+    """A heal must reach Hermes' approval gate, not run the command itself."""
+    module = H.load_plugin()
+    ctx = H.FakeCtx()
+    ctx.reply = '{"output":"","exit_code":-1,"error":"Command denied: restart","status":"blocked"}'
+    module.register(ctx)
+    config = H.submodule("config")
+
+    approve = config.approver()
+    assert approve is not None
+    outcome = approve("systemctl restart demo.service", node={"id": "svc-demo"}, session_id="s1")
+    assert outcome["ok"] is False
+    assert outcome["approved"] is False
+    assert ctx.dispatched[-1][0] == "terminal"
+    assert ctx.dispatched[-1][1]["command"] == "systemctl restart demo.service"
+
+
+def test_the_approver_passes_the_project_dir_for_compose(plugin_home):
+    module = H.load_plugin()
+    ctx = H.FakeCtx()
+    ctx.reply = '{"output":"started","exit_code":0,"error":null}'
+    module.register(ctx)
+    config = H.submodule("config")
+
+    outcome = config.approver()(
+        "docker compose up -d", node={"id": "svc-stack", "project_path": "/srv/stack"}
+    )
+    assert outcome["ok"] is True
+    assert ctx.dispatched[-1][1]["workdir"] == "/srv/stack"
+
+
 def test_atlas_command_reports_counts_and_sweeps(plugin_home, registry):
     module = H.load_plugin()
     H.configure({"registry_path": str(registry)})

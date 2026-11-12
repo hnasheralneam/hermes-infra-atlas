@@ -22,6 +22,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from . import CollectorResult
+from ..childenv import child_env
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,7 @@ def _local_networks() -> list[Any]:
             capture_output=True,
             text=True,
             timeout=2,
+            env=child_env(),
         )
         for line in out.stdout.splitlines():
             match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/(\d+)", line)

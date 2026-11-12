@@ -239,6 +239,37 @@ def file_for(root: Path, kind: str, node_id: str) -> Path:
     return root / folder / f"{stem}.md"
 
 
+# A node id becomes a path component, so it is validated against the same shape
+# the registry uses everywhere else before any write touches the filesystem.
+NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def validate_node_id(node_id: str) -> str:
+    """Return *node_id* if it is a safe path component, else raise ``ValueError``."""
+    text = str(node_id or "").strip()
+    if not NODE_ID_RE.fullmatch(text) or ".." in text:
+        raise ValueError(
+            f"invalid node_id {node_id!r}: use 1-64 characters of [a-z0-9._-], "
+            "starting with a letter or digit"
+        )
+    return text
+
+
+def entry_path(root: Path, kind: str, node_id: str) -> Path:
+    """Resolve the entry file for *node_id* and prove it stays inside *root*.
+
+    Every write goes through here: a node id is caller-supplied, and a value
+    like ``../../etc/passwd`` would otherwise land outside the registry.
+    """
+    root = Path(root).resolve()
+    path = file_for(root, kind, validate_node_id(node_id)).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise ValueError(f"refusing to write outside the registry: {node_id!r}") from None
+    return path
+
+
 def _clean_pitfall(text: str) -> str:
     cleaned = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+", "", text.strip())
     cleaned = cleaned.replace("**", "").replace("__", "")
@@ -640,7 +671,10 @@ def upsert_entry(
     node_id = str(node.get("id") or "").strip()
     if not node_id:
         raise ValueError("node_id is required")
-    path = file_for(root, kind, node_id)
+    # Validated + confined before anything reads or writes: the id is caller
+    # supplied and becomes a path component.
+    path = entry_path(root, kind, node_id)
+    root = Path(root).resolve()
     existed = path.exists()
     old_text = path.read_text(encoding="utf-8", errors="replace") if existed else ""
     _meta, _raw, old_body = split_frontmatter(old_text)

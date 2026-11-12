@@ -22,19 +22,19 @@ provides_hooks:
 config_schema:
   registry_path:
     type: str
-    default: "~/.hermes/infra-registry"
+    default: ""
     label: "Registry directory"
-    description: "Markdown infrastructure knowledge base (servers/, services/, projects/, INDEX.md, change-log.md)."
+    description: "Markdown infrastructure knowledge base (servers/, services/, projects/, INDEX.md, change-log.md). Empty = <profile data dir>/infra-registry."
   credentials_path:
     type: str
-    default: "~/.hermes/plugin-data/infra-atlas/credentials.json"
+    default: ""
     label: "Credential vault (outside the registry)"
-    description: "Private 0600 JSON store for credential values referenced by `credentials:` in registry entries. Keep it out of the registry — that tree is mirrored to Nextcloud and committed."
+    description: "Private 0600 JSON store for credential values referenced by `credentials:` in registry entries. Keep it out of the registry — that tree is mirrored to Nextcloud and committed. Empty = <profile data dir>/credentials.json, so each profile has its own vault."
   credentials_key_path:
     type: str
-    default: "~/.hermes/plugin-data/infra-atlas/credentials.key"
+    default: ""
     label: "Credential vault encryption key"
-    description: "0600 Fernet key generated on first write. When `cryptography` is unavailable the vault stores plaintext and records encrypted=false."
+    description: "0600 Fernet key generated on first write. When `cryptography` is unavailable the vault stores plaintext and records encrypted=false. Empty = <profile data dir>/credentials.key."
   guardrail_mode:
     type: str
     choices: [block, warn, off]
@@ -44,9 +44,9 @@ config_schema:
   auto_heal_mode:
     type: str
     choices: [auto, playbook_only, notify_only, off]
-    default: auto
+    default: notify_only
     label: "Downtime response mode"
-    description: "auto runs the safe local restart playbook and escalates to the agent if the node stays down. playbook_only never wakes the agent. notify_only only records and alerts. off disables automated response."
+    description: "notify_only (default) records the incident and wakes the agent, which then runs the restart through Hermes' command approval. auto also attempts the allow-listed restart playbook on the agent's behalf — every command still goes through approval, and a process with no approval channel (cron watchdog, dashboard) never executes one. playbook_only never wakes the agent. off disables automated response."
   failure_threshold:
     type: int
     default: 2

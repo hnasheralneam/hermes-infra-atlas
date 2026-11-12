@@ -294,23 +294,35 @@ async def reconcile(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/heal")
 async def heal(body: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch a heal.
+
+    The dashboard process has no approval channel, so it never runs a restart
+    itself: it returns the remediation brief for the agent to execute (where
+    Hermes' command approval applies). ``mode=playbook`` is kept as an alias so
+    an older page cannot silently execute anything.
+    """
     store = _store()
     uptime = _plugin_module("uptime")
     node = store.get_node(str(body.get("node_id") or "")) or store.find_node(str(body.get("node_id") or ""))
     if not node:
         return {"ok": False, "error": "unknown node"}
     incident = store.active_incident_for(node["id"])
-    if str(body.get("mode") or "playbook") == "agent_brief":
-        store.record_session_read("desktop", node["id"], "desktop")
-        brief = uptime.remediation_brief(store, node, incident or {
-            "id": 0,
-            "trigger_error": (node.get("live_state") or {}).get("probe_detail") or "manual dispatch",
-            "failure_count": node.get("failure_streak") or 1,
-        })
-        return {"ok": True, "mode": "agent_brief", "remediation_brief": brief}
-    outcome = uptime.playbook_heal(store, node, incident)
-    _broadcast("incident.healed" if outcome.get("ok") else "incident.heal_failed", {"node_id": node["id"], **outcome})
-    return _json(outcome)
+    store.record_session_read("desktop", node["id"], "desktop")
+    brief = uptime.remediation_brief(store, node, incident or {
+        "id": 0,
+        "trigger_error": (node.get("live_state") or {}).get("probe_detail") or "manual dispatch",
+        "failure_count": node.get("failure_streak") or 1,
+    })
+    return {
+        "ok": True,
+        "mode": "agent_brief",
+        "needs_approval": True,
+        "remediation_brief": brief,
+        "note": (
+            "Restarts run through Hermes' command approval in an agent session; the dashboard "
+            "dispatches the brief instead of executing the command."
+        ),
+    }
 
 
 @router.post("/incidents/{incident_id}/resolve")

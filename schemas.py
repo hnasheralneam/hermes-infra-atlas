@@ -108,7 +108,9 @@ INFRA_UPSERT = {
             "parent_id": {"type": "string"},
             "depends_on": {"type": "array", "items": {"type": "string"}},
             "probe": {"type": "string", "description": "http(s):// URL or tcp://host:port used for uptime."},
-            "recovery_cmd": {"type": "string", "description": "Safe restart command for the local playbook."},
+            # ``recovery_cmd`` is deliberately absent: it is the one field that
+            # names a command the plugin will run, so it is written by the
+            # operator in the registry, never by the model through this tool.
             "auto_heal_policy": {
                 "type": "string",
                 "enum": ["inherit", "auto", "playbook_only", "notify_only", "off"],
@@ -146,8 +148,9 @@ INFRA_INCIDENTS = {
     "description": (
         "Uptime incidents and autonomous downtime response. 'list' shows open/healing/escalated and recent "
         "resolved incidents with fleet uptime; 'get' returns the full remediation brief for one incident "
-        "(and unlocks its registry entry); 'heal' runs the deterministic local restart playbook and verifies "
-        "with a probe; 'resolve'/'escalate' close an incident with a summary; 'setup_watchdog' installs the "
+        "(and unlocks its registry entry); 'heal' restarts the node's documented service through Hermes' "
+        "command approval and verifies with a probe (refused where no approval channel exists); "
+        "'resolve'/'escalate' close an incident with a summary; 'setup_watchdog' installs the "
         "zero-token background watchdog (a Hermes cron pre-check that only wakes the agent when something is "
         "actually down)."
     ),

@@ -39,6 +39,57 @@ def _bind_config(ctx) -> None:
         return ctx.get_config(key, default)
 
     config.configure(getter)
+    # State lives under the active profile, so two profiles never share a vault
+    # or a registry.
+    try:
+        config.configure_data_dir(ctx.state.data_dir)
+    except Exception:  # noqa: BLE001 - older hosts have no state facade
+        logger.debug("infra-atlas: ctx.state.data_dir unavailable; using the profile default")
+
+
+def _bind_approver(ctx) -> None:
+    """Run restarts through the host ``terminal`` tool, so approval applies.
+
+    The plugin never executes a restart itself. Dispatching ``terminal`` means
+    the command passes Hermes' dangerous-command gate exactly like a command the
+    agent typed: a human approves it, or the configured approval mode decides.
+    """
+
+    def approve(command: str, node: dict[str, Any] | None = None, session_id: str = "") -> dict[str, Any]:
+        node = node or {}
+        payload = {
+            "command": command,
+            "timeout": 60,
+            # Compose commands must run in the operator's declared project dir.
+            "workdir": str(node.get("project_path") or "").strip() or None,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        # ``session_id`` routes the approval prompt to the session that triggered
+        # the heal, so a human answers it in the chat they are looking at.
+        kwargs = {"session_id": session_id} if session_id else {}
+        raw = ctx.dispatch_tool("terminal", payload, **kwargs)
+        try:
+            result = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        except Exception:  # noqa: BLE001 - a non-JSON result is still an outcome
+            return {"ok": False, "approved": False, "reason": str(raw)[:400], "command": command}
+        blocked = result.get("status") in {"blocked", "pending_approval"} or bool(result.get("error"))
+        if blocked:
+            return {
+                "ok": False,
+                "approved": False,
+                "needs_approval": result.get("status") == "pending_approval",
+                "command": command,
+                "reason": str(result.get("error") or result.get("output") or "the restart was not approved")[:400],
+            }
+        return {
+            "ok": True,
+            "approved": True,
+            "command": command,
+            "returncode": int(result.get("exit_code", 0) or 0),
+            "output": str(result.get("output") or "")[:400],
+        }
+
+    config.configure_approver(approve)
 
 
 def _register_tools(ctx) -> None:
@@ -156,6 +207,7 @@ def register(ctx) -> None:  # noqa: D401 - host entrypoint
             "(hermes_plugins.infra_atlas). Install it under <hermes home>/plugins/infra-atlas."
         )
     _bind_config(ctx)
+    _bind_approver(ctx)
     tools.bind_context(ctx)
     _register_tools(ctx)
     _register_hooks(ctx)

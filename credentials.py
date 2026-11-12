@@ -32,8 +32,8 @@ from . import config as plugin_config
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PATH = "~/.hermes/plugin-data/infra-atlas/credentials.json"
-DEFAULT_KEY_PATH = "~/.hermes/plugin-data/infra-atlas/credentials.key"
+DEFAULT_NAME = "credentials.json"
+DEFAULT_KEY_NAME = "credentials.key"
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 
@@ -67,13 +67,19 @@ class CredentialError(RuntimeError):
 # --------------------------------------------------------------------------- paths
 
 def vault_path() -> Path:
-    raw = str(plugin_config.setting("credentials_path") or DEFAULT_PATH)
-    return Path(os.path.expandvars(os.path.expanduser(raw)))
+    """The vault file, profile-scoped by default (``ctx.state.data_dir``)."""
+    raw = plugin_config.setting("credentials_path")
+    if not raw:
+        return plugin_config.state_path(DEFAULT_NAME)
+    return Path(os.path.expandvars(os.path.expanduser(str(raw))))
 
 
 def key_path() -> Path:
-    raw = str(plugin_config.setting("credentials_key_path") or DEFAULT_KEY_PATH)
-    return Path(os.path.expandvars(os.path.expanduser(raw)))
+    """The vault's encryption key, profile-scoped by default."""
+    raw = plugin_config.setting("credentials_key_path")
+    if not raw:
+        return plugin_config.state_path(DEFAULT_KEY_NAME)
+    return Path(os.path.expandvars(os.path.expanduser(str(raw))))
 
 
 def _ensure_dir(path: Path) -> None:

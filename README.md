@@ -97,7 +97,7 @@ the moment they matter.
 | `infra_diff` | What changed, which incidents opened, who touched what — over a window. |
 | `infra_upsert` | Create/update/adopt/remove a registry entry, with change-log. |
 | `infra_bootstrap` | Annotate an existing KB, or scaffold one from live discovery. |
-| `infra_incidents` | List/get/heal/resolve/escalate incidents; install the zero-token watchdog. |
+| `infra_incidents` | List/get/heal/resolve/escalate incidents; install the zero-token watchdog. `heal` runs the documented restart **through Hermes' command approval**. |
 | `infra_credentials` | Private credential vault: list, get (gated), set/rotate, remove, and scan the KB for literals. |
 
 Bundled skill: `infra-atlas:infra-atlas` (loaded automatically when the plugin is enabled).
@@ -106,9 +106,14 @@ Bundled skill: `infra-atlas:infra-atlas` (loaded automatically when the plugin i
 
 `registry_path`, `credentials_path` / `credentials_key_path` (see below),
 `guardrail_mode` (`block`/`warn`/`off`), `auto_heal_mode`
-(`auto`/`playbook_only`/`notify_only`/`off`), `failure_threshold`, `heal_cooldown_sec`,
+(`notify_only` (default) / `auto` / `playbook_only` / `off`), `failure_threshold`, `heal_cooldown_sec`,
 the three zero-config collectors, and the opt-in Proxmox/Headscale
 credentials (secrets go to `.env` through Hermes and are read with `agent.secret_scope`).
+
+`registry_path`, `credentials_path` and `credentials_key_path` all default to **empty**, which
+means "under the active profile's data dir" (`ctx.state.data_dir`). Two profiles therefore never
+share a vault or a registry. An existing `~/.hermes/infra-registry` keeps being used when it is
+present, so upgrading changes nothing on disk.
 
 ## Credentials never live in the registry
 
@@ -148,15 +153,32 @@ Writes are agent-side only — the vault is never writable over HTTP.
   (read-only), `/proc/net/tcp`, and — only when configured — the Proxmox and Headscale
   APIs.
 - **Writes** only inside the registry directory (entry files, `INDEX.md`, `change-log.md`)
-  and its own SQLite database under `$HERMES_HOME/plugin-data/infra-atlas/`.
-- **Runs commands** only for `recovery_cmd`, only on this host, only for an allow-listed
-  prefix (`systemctl …`, `service …`, `docker compose …`, `podman …`, `pct …`, `qm …`),
-  with a cooldown and an attempt budget.
+  and its own SQLite database under the active profile's `plugin-data/infra-atlas/`.
+  Every write path is validated: the node id must match `^[a-z0-9][a-z0-9._-]{0,63}$` and
+  the resolved file must stay inside the registry root.
+- **Runs commands** only for `recovery_cmd`, only on this host, and only when the command is
+  exactly one allow-listed restart shape — `systemctl [--user] restart|start <unit>`,
+  `service <unit> restart|start`, `docker compose restart|start|up [-d]` inside a
+  registry-declared `project_path`, or `pct|qm start <vmid>`. Power-state verbs (`stop`,
+  `disable`), `destroy`, `exec`, `podman run`, `docker compose down`, and anything carrying a
+  shell metacharacter are refused.
+- **Never executes a restart itself.** The command is dispatched through the host `terminal`
+  tool, so Hermes' dangerous-command approval applies exactly as if the agent had typed it.
+  A process with no approval channel — the cron watchdog, the dashboard backend — does not
+  run restarts at all; it opens the incident and hands the agent the brief.
+  `recovery_cmd` is therefore **not writable through `infra_upsert`**: it is an operator
+  field in the registry entry.
+- **`auto_heal_mode` defaults to `notify_only`** — record the incident and wake the agent.
+  `auto` additionally lets the agent-side sweep attempt the allow-listed restart (still
+  through approval); `playbook_only` never wakes the agent; `off` disables the response.
 - **Blocks** mutating tool calls while the guardrail is in `block` mode; set it to `warn` or
   `off` to disable. Inspection is never blocked and never unlocks: `systemctl status|cat|show`,
   `journalctl`, `docker ps|logs|inspect`, `qm list`, `pvesh get`, `ip addr`, a plain `curl`/`wget`
   GET. A `-X POST`/`-d`/`--data` request, or any `systemctl start|stop|restart|reload|enable`,
   still requires the entry to have been read.
+- **Passes a minimal environment** to every child process: `PATH`, `LANG`/`LC_ALL`,
+  `SYSTEMD_PAGER`, plus `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` for `systemctl --user`.
+  The agent's API keys and tokens are never inherited.
 
 No telemetry, no network calls to anything not configured above.
 

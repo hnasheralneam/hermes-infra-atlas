@@ -1723,15 +1723,24 @@ const LEGEND_LINKS = [
 ]
 
 // ── page & floating chrome ─────────────────────────────────────────────────
+// A restart is never executed from the page: the dashboard has no approval
+// channel, so the button dispatches the node's remediation brief into the
+// active chat, where the agent's command approval applies.
 async function healNode(nodeId, setBusy, refetch) {
   setBusy(`heal:${nodeId}`)
   try {
-    const outcome = await rest('/heal', { method: 'POST', body: { node_id: nodeId } })
+    const outcome = await rest('/heal', { method: 'POST', body: { node_id: nodeId, mode: 'agent_brief' } })
+    if (!outcome.ok) {
+      host.notify({ kind: 'warning', message: `${nodeId}: ${outcome.error || 'could not build a brief'}` })
+      return
+    }
+    const sessionId = host.state.focusedSessionId && host.state.focusedSessionId.get ? host.state.focusedSessionId.get() : null
+    const sent = host.composer.submit(sessionId ?? null, outcome.remediation_brief)
     host.notify({
-      kind: outcome.ok ? 'info' : 'warning',
-      message: outcome.ok
-        ? `Healed ${nodeId} via ${outcome.command} (${outcome.status})`
-        : `${nodeId}: ${outcome.reason || outcome.detail || 'heal did not succeed'}`
+      kind: sent ? 'info' : 'warning',
+      message: sent
+        ? `${nodeId}: remediation brief sent to the chat — the restart runs after approval`
+        : 'Open a chat to dispatch the remediation brief'
     })
     await refetch()
   } catch (err) {
@@ -2559,8 +2568,8 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                         await onRefetch()
                         await detail.refetch()
                       }),
-                    title: `Run the documented recovery command: ${item.recovery_cmd}`,
-                    children: '↻ Run recovery command'
+                    title: `Dispatch the documented recovery command for approval: ${item.recovery_cmd}`,
+                    children: '↻ Dispatch recovery for approval'
                   })
                 : null,
               !isRetired && item.registry_path && guardrail !== 'off'
@@ -2912,7 +2921,7 @@ function UptimeSection({ item, probes, incidents, busy, setBusy, onRefetch, deta
                     await onRefetch()
                     await detail.refetch()
                   }),
-                children: '↻ Test Recovery Playbook Now'
+                children: '↻ Dispatch recovery for approval'
               })
             : null
         ]

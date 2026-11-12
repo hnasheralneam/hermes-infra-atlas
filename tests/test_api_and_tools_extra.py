@@ -214,3 +214,63 @@ def test_infra_incidents_setup_watchdog_reports_a_path(plugin_home, registry):
     assert payload["interval_min"] >= 1
     # outside an agent session there is no plugin context to register the cron job
     assert payload["cron"]["ok"] is False
+
+
+def test_setup_watchdog_refuses_inside_a_cron_run(plugin_home, registry, monkeypatch):
+    """A cron run may not schedule cron jobs unless cron.allow_agent_scheduling is on."""
+    H.load_plugin()
+    H.configure({"registry_path": str(registry)})
+    tools = H.submodule("atlas_tools")
+    ctx = H.FakeCtx()
+    tools.bind_context(ctx)
+
+    monkeypatch.setenv("HERMES_CRON_SESSION", "job-42")
+    monkeypatch.setattr(tools, "_agent_scheduling_allowed", lambda: False)
+    payload = json.loads(tools.infra_incidents({"action": "setup_watchdog"}))
+    assert payload["cron"]["ok"] is False
+    assert "allow_agent_scheduling" in payload["cron"]["reason"]
+    assert ctx.dispatched == []
+
+    monkeypatch.setattr(tools, "_agent_scheduling_allowed", lambda: True)
+    payload = json.loads(tools.infra_incidents({"action": "setup_watchdog"}))
+    assert payload["cron"]["ok"] is True
+    assert ctx.dispatched and ctx.dispatched[0][0] == "cronjob_manage"
+
+
+def test_setup_watchdog_still_works_in_an_interactive_session(plugin_home, registry, monkeypatch):
+    H.load_plugin()
+    H.configure({"registry_path": str(registry)})
+    tools = H.submodule("atlas_tools")
+    ctx = H.FakeCtx()
+    tools.bind_context(ctx)
+    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+    monkeypatch.setattr(tools, "_agent_scheduling_allowed", lambda: False)
+    payload = json.loads(tools.infra_incidents({"action": "setup_watchdog"}))
+    assert payload["cron"]["ok"] is True
+
+
+def test_paths_default_under_the_profile_data_dir(plugin_home, monkeypatch):
+    """No hardcoded ~/.hermes: the vault and registry follow the active profile."""
+    H.load_plugin()
+    config = H.submodule("config")
+    credentials = H.submodule("credentials")
+    # No legacy tree on this machine, so the profile default is what applies.
+    monkeypatch.setattr(config, "LEGACY_REGISTRY", str(plugin_home / "no-legacy-here"))
+    H.configure({"registry_path": None})
+    config.configure_data_dir(plugin_home / "plugin-data" / "infra-atlas")
+
+    assert credentials.vault_path() == plugin_home / "plugin-data" / "infra-atlas" / "credentials.json"
+    assert credentials.key_path() == plugin_home / "plugin-data" / "infra-atlas" / "credentials.key"
+    assert config.registry_root() == plugin_home / "plugin-data" / "infra-atlas" / "infra-registry"
+
+
+def test_the_legacy_registry_path_still_resolves(plugin_home, monkeypatch):
+    """An existing ~/.hermes/infra-registry keeps being used when it is there."""
+    H.load_plugin()
+    config = H.submodule("config")
+    legacy = plugin_home / "infra-registry"
+    (legacy / "services").mkdir(parents=True)
+    monkeypatch.setattr(config, "LEGACY_REGISTRY", str(legacy))
+    H.configure({"registry_path": None})
+    config.configure_data_dir(plugin_home / "plugin-data" / "infra-atlas")
+    assert config.registry_root() == legacy

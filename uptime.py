@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
-import subprocess
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -21,9 +20,51 @@ from . import config as plugin_config
 logger = logging.getLogger(__name__)
 
 INCIDENT_KINDS = {"service", "container", "model_endpoint", "vm", "lxc"}
-SAFE_PREFIXES = ("systemctl ", "service ", "docker compose ", "docker-compose ", "podman ", "pct ", "qm ")
-_HEAL_TIMEOUT = 20
+
+# The restart playbook is deliberately narrow: exact verbs on exact object
+# shapes, nothing that can stop, destroy, exec into or create anything.
+#
+#   systemctl [--user] restart|start <unit>
+#   service <unit> restart|start
+#   docker compose [-f <file>] restart|start|up [-d]   (in a registry-declared dir)
+#   docker-compose [-f <file>] restart|start|up [-d]
+#   pct start <vmid>            qm start <vmid>
+#
+# Anything else — ``stop``, ``disable``, ``destroy``, ``pct exec``, ``podman run``,
+# shell metacharacters, a path outside the registry-declared project dir — is
+# refused before approval is even requested.
+_UNIT = r"[A-Za-z0-9@:_.\\-]{1,128}"
+_VMID = r"\d{1,6}"
+
+_HEAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(rf"^systemctl (?:--user )?(?:restart|start) {_UNIT}$"),
+    re.compile(rf"^service {_UNIT} (?:restart|start)$"),
+    re.compile(r"^docker(?:-| )compose (?:-f \S+ )?(?:restart|start|up)(?: -d)?$"),
+    re.compile(rf"^(?:pct|qm) start {_VMID}$"),
+)
+
+# Verbs that must never appear anywhere in a playbook command, even in a shape
+# a pattern above would otherwise accept.
+_FORBIDDEN_TOKENS = (
+    "stop", "destroy", "exec", "run", "kill", "rm", "reboot", "shutdown",
+    "disable", "mask", "down", "prune", "pull", "build", "create", "pause",
+)
+
 _VERIFY_WAIT = 2.0
+
+
+def allowlisted_command(cmd: str) -> bool:
+    """Whether *cmd* is exactly one allow-listed restart shape."""
+    text = " ".join(str(cmd or "").split())
+    if not text or len(text) > 200:
+        return False
+    if any(marker in text for marker in (";", "&", "|", "`", "$(", ">", "<", "\n", "\r", "\\")):
+        return False
+    if not any(pattern.match(text) for pattern in _HEAL_PATTERNS):
+        return False
+    return not any(
+        re.search(rf"(?:^|\s){token}(?:\s|$)", text) for token in _FORBIDDEN_TOKENS
+    )
 
 
 # -- eligibility ------------------------------------------------------------
@@ -93,7 +134,8 @@ def remediation_brief(store, node: dict[str, Any], incident: dict[str, Any]) -> 
             f"- Managed by: {node.get('managed_by') or 'unknown'}"
             f" (unit: {node.get('systemd_unit') or 'n/a'}, host: {node.get('host_ip') or 'n/a'},"
             f" ports: {', '.join(str(p) for p in node.get('ports') or []) or 'n/a'})",
-            f"- Documented recovery command: {node.get('recovery_cmd') or 'none'}",
+            f"- Documented recovery command: {node.get('recovery_cmd') or 'none'}"
+            " (run it through the terminal tool, so Hermes' command approval applies)",
             f"- CRITICAL PITFALLS: {pitfalls}",
             "",
             "Your mission:",
@@ -109,14 +151,69 @@ def remediation_brief(store, node: dict[str, Any], incident: dict[str, Any]) -> 
 
 
 # -- stage 1 ----------------------------------------------------------------
-def playbook_heal(store, node: dict[str, Any], incident: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """Run the declared restart locally, then verify with a probe."""
-    cmd = str(node.get("recovery_cmd") or "").strip()
+def _project_dir_allowed(node: dict[str, Any], cmd: str) -> bool:
+    """A compose command may only run in a registry-declared project directory.
+
+    The registry's ``project_path`` is the operator's own declaration; without
+    one there is no directory the plugin is allowed to run compose in.
+    """
+    if not cmd.startswith(("docker compose", "docker-compose")):
+        return True
+    declared = str(node.get("project_path") or "").strip()
+    return bool(declared) and Path(declared).is_absolute()
+
+
+def run_approved(store, node: dict[str, Any], cmd: str, session_id: str = "") -> dict[str, Any]:
+    """Run one allow-listed restart through Hermes' approval gate.
+
+    The command is never executed here. It is handed to the host ``terminal``
+    tool, so the same dangerous-command prompt, deny rules and approval modes
+    that guard any other shell command apply — a human sees it, or the
+    configured unattended/cron policy decides. When no approver is bound (the
+    dashboard process, the cron watchdog, a bare import) nothing runs and the
+    caller is told the heal needs an agent.
+    """
+    approver = plugin_config.approver()
+    if approver is None:
+        return {
+            "ok": False,
+            "needs_approval": True,
+            "command": cmd,
+            "reason": (
+                "no approval channel in this process: restarts run only from an agent session, "
+                "where Hermes' command approval applies"
+            ),
+        }
+    try:
+        result = approver(cmd, node=node, session_id=session_id or "infra-atlas-heal")
+    except Exception as exc:  # noqa: BLE001 - an approver failure is never a silent run
+        return {"ok": False, "needs_approval": True, "command": cmd, "reason": f"approval failed: {exc}"}
+    return dict(result or {})
+
+
+def playbook_heal(
+    store,
+    node: dict[str, Any],
+    incident: Optional[dict[str, Any]] = None,
+    session_id: str = "",
+) -> dict[str, Any]:
+    """Restart the declared service through approval, then verify with a probe."""
+    cmd = " ".join(str(node.get("recovery_cmd") or "").split())
     node_id = node["id"]
     if not cmd:
         return {"node_id": node_id, "ok": False, "reason": "no recovery_cmd declared or inferred"}
-    if not cmd.startswith(SAFE_PREFIXES):
-        return {"node_id": node_id, "ok": False, "reason": f"refusing non-allowlisted recovery command: {cmd}"}
+    if not allowlisted_command(cmd):
+        return {
+            "node_id": node_id,
+            "ok": False,
+            "reason": f"refusing non-allowlisted recovery command: {cmd}",
+        }
+    if not _project_dir_allowed(node, cmd):
+        return {
+            "node_id": node_id,
+            "ok": False,
+            "reason": "refusing docker compose outside a registry-declared project_path",
+        }
     if not _is_local(node, store):
         return {"node_id": node_id, "ok": False, "reason": f"{node.get('host_ip')} is not this host; needs the agent"}
     if incident and int(incident.get("heal_attempts") or 0) >= 2:
@@ -131,13 +228,27 @@ def playbook_heal(store, node: dict[str, Any], incident: Optional[dict[str, Any]
         )
     store.set_fields(node_id, last_heal_attempt_at=time.time())
     started = time.monotonic()
-    try:
-        proc = subprocess.run(
-            shlex.split(cmd), capture_output=True, text=True, timeout=_HEAL_TIMEOUT
+    approval = run_approved(store, node, cmd, session_id=session_id)
+    if approval.get("needs_approval") or approval.get("approved") is False:
+        reason = str(approval.get("reason") or "the restart was not approved")
+        store.log_activity(
+            session_id or "infra-atlas-heal",
+            "infra_incidents",
+            node_id,
+            "auto_heal_blocked",
+            blocked=True,
+            summary=f"restart `{cmd}` not run: {reason}",
         )
-        rc, output = proc.returncode, (proc.stderr or proc.stdout or "").strip()[:400]
-    except (OSError, subprocess.SubprocessError) as exc:
-        rc, output = 1, f"{type(exc).__name__}: {exc}"
+        return {
+            "node_id": node_id,
+            "ok": False,
+            "needs_approval": True,
+            "command": cmd,
+            "reason": reason,
+            "status": "not_run",
+        }
+    rc = int(approval.get("returncode", approval.get("exit_code", 0)) or 0)
+    output = str(approval.get("output") or "")[:400]
     time.sleep(_VERIFY_WAIT)
 
     probe_target = node.get("probe") or (
@@ -289,9 +400,21 @@ def evaluate(
         if policy in {"off", "notify_only"}:
             continue
         if policy in {"auto", "playbook_only"} and node.get("recovery_cmd"):
-            outcome = playbook_heal(store, node, incident)
+            outcome = playbook_heal(store, node, incident, session_id=session_id)
             if outcome.get("ok"):
                 healed.append({"node_id": node_id, "incident_id": incident["id"], "via": "playbook"})
+            elif outcome.get("needs_approval"):
+                # No approval channel (cron watchdog, dashboard): the incident
+                # stays open and its brief wakes the agent, which is the only
+                # context where a restart can be approved.
+                store.log_activity(
+                    session_id or "sweep",
+                    "infra_sweep",
+                    node_id,
+                    "auto_heal_blocked",
+                    blocked=True,
+                    summary=f"restart awaiting approval: {outcome.get('reason')}",
+                )
 
     return {
         "opened": opened,
@@ -356,7 +479,11 @@ def _run() -> int:
     store_module = importlib.import_module(PACKAGE + ".store")
 
     config.configure(None)
-    summary = fusion.run_sweep(trigger_auto_heal=True, session_id="cron-watchdog")
+    # The watchdog runs in a cron process with no approval channel, so it never
+    # attempts a restart: it opens incidents and prints the briefs that wake the
+    # agent, which is where a heal can be approved. ``trigger_auto_heal=False``
+    # is what enforces that, not the configured mode.
+    summary = fusion.run_sweep(trigger_auto_heal=False, session_id="cron-watchdog")
     store = store_module.get_store()
     pending = store.list_incidents(statuses=["open", "healing", "escalated"])
     if not pending:

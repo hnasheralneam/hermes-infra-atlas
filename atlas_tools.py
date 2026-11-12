@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -245,8 +246,20 @@ def infra_upsert(args: dict[str, Any], session_id: str = "", task_id: str = "", 
         for key in ("host_ip", "tailnet_ip", "vmid", "ports", "parent_id", "systemd_unit", "managed_by", "label"):
             payload[key] = args.get(key) or existing.get(key) or live_state.get(key)
     else:
+        # ``recovery_cmd`` is not accepted from the model: it names a command the
+        # plugin will execute, so it belongs to the operator's registry only.
+        # A request that tries to set it is rejected rather than silently dropped.
+        if str(args.get("recovery_cmd") or "").strip():
+            return _json(
+                {
+                    "error": (
+                        "recovery_cmd is not writable through infra_upsert: it names a command the "
+                        "plugin runs, so it must be set by the operator in the registry entry"
+                    )
+                }
+            )
         for key in ("host_ip", "tailnet_ip", "vmid", "ports", "parent_id", "depends_on",
-                    "systemd_unit", "managed_by", "project_path", "probe", "recovery_cmd",
+                    "systemd_unit", "managed_by", "project_path", "probe",
                     "auto_heal_policy", "pitfalls", "label", "kind"):
             if args.get(key) not in (None, "", []):
                 payload[key] = args[key]
@@ -362,7 +375,7 @@ def infra_incidents(args: dict[str, Any], session_id: str = "", task_id: str = "
         if not node:
             return _json({"error": "node not found"})
         store.record_session_read(session, node["id"], "infra_incidents")
-        outcome = uptime.playbook_heal(store, node, incident)
+        outcome = uptime.playbook_heal(store, node, incident, session_id=session)
         if outcome.get("ok"):
             store.log_activity(session, "infra_incidents", node["id"], "auto_heal", summary=f"healed via {outcome.get('command')}")
         return _json(outcome)
@@ -604,10 +617,42 @@ def infra_credentials(args: dict[str, Any], session_id: str = "", task_id: str =
     return _json({"error": f"unknown action {action!r}"})
 
 
+def _cron_session() -> bool:
+    """Whether this process is a cron run (Hermes binds ``HERMES_CRON_SESSION``)."""
+    try:
+        from gateway.session_context import get_session_env
+
+        value = get_session_env("HERMES_CRON_SESSION")
+    except Exception:  # pragma: no cover - trimmed installs
+        value = os.environ.get("HERMES_CRON_SESSION", "")
+    return bool(str(value or "").strip())
+
+
+def _agent_scheduling_allowed() -> bool:
+    """``cron.allow_agent_scheduling`` — off by default, so a cron run may not self-schedule."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        config = load_config_readonly() or {}
+    except Exception:  # pragma: no cover - trimmed installs
+        return False
+    return bool(((config.get("cron") or {}).get("allow_agent_scheduling")))
+
+
 def _dispatch_cron(script_path, interval: int, prompt: str, enabled: bool) -> dict[str, Any]:
     """Create/refresh the watchdog job through the host's cron tool."""
     if _ctx is None:
         return {"ok": False, "reason": "no plugin context — run this from an agent session"}
+    if _cron_session() and not _agent_scheduling_allowed():
+        # Loop prevention: a cron run creating cron jobs is exactly what the
+        # host's cron.allow_agent_scheduling gate exists to stop.
+        return {
+            "ok": False,
+            "reason": (
+                "refusing to schedule a job from a cron session: set "
+                "cron.allow_agent_scheduling: true in config.yaml to permit it"
+            ),
+        }
     payload = {
         "action": "create",
         "schedule": f"{interval}m",

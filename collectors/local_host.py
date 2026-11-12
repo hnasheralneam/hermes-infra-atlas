@@ -8,7 +8,6 @@ key needed). Everything here is read-only and bounded by a short timeout.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import socket
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import CollectorResult
+from ..childenv import child_env, command_wants_user_scope
 
 MAX_OUTPUT = 2_000_000
 
@@ -54,7 +54,10 @@ def _run(argv: list[str], timeout: float = 2.0) -> tuple[int, str]:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "SYSTEMD_PAGER": "cat", "LC_ALL": "C.UTF-8"},
+            # Minimal env: the collectors need PATH and a locale, never the
+            # agent's API keys. ``systemctl --user`` additionally needs the
+            # session bus, which is why the scope is detected from argv.
+            env=child_env(user_scope=command_wants_user_scope(argv)),
         )
         return proc.returncode, (proc.stdout or "")[:MAX_OUTPUT]
     except (OSError, subprocess.SubprocessError):
