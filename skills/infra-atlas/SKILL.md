@@ -222,6 +222,57 @@ the code and prove it with a test — don't just edit skill text.
   itself whenever the host guardrail is off — which is exactly when someone is
   doing bulk work.
 - **A gate with no sanctioned exit is an obstacle.** Cover only the files
+  `infra_upsert` owns (`servers/`, `services/`, `projects/` entries, `INDEX.md`,
+  `change-log.md`). `plans/`, `conventions.md`, `LIVE-STATE.md`, tracker files and
+  log dirs have no tool path — leave them hand-editable, or agents route around
+  the gate and the rule stops meaning anything.
+- **You cannot verify your own hook edit from the session that made it.** The
+  plugin is imported once per process, so the running session keeps executing the
+  code it loaded at start. A probe run from that same session tests stale code
+  and will "pass" or "fail" misleadingly. Prove a change in a *fresh* process,
+  then reload the gateway for it to take effect.
+- **Resolve paths before comparing them.** The shell-write matcher compares string
+  prefixes, so a symlinked alias of the registry escapes it: `write_file`/`patch`
+  through the alias are caught (realpath'd), `sed -i`/`tee` through it are not.
+  Every alias path (`~/hermes-kb/01-Infrastructure/infra-registry` and friends)
+  must be realpath-resolved into the accepted-prefix set.
+
+## 7. Internals that matter when auditing compliance
+
+- **The markdown registry is the source of truth.** `infra_query` returns the entry
+  text read fresh from disk; the sqlite graph is an index re-parsed from the wiki on
+  every sweep. Direct `read_file`/`patch` on registry files is therefore the same
+  data — never treat path access as a bypass or "leakage" of the tool API.
+- **Hooks fire in every process** (discord, cron, subagent, oneshot) even where the
+  plugin's *tools* are not exposed to the model. A session that never calls
+  `infra_query` can still be fully guardrailed — check the ledger before concluding
+  a surface bypasses atlas.
+- **Ground truth for access audits:** `~/.hermes/plugin-data/infra-atlas/atlas.db`
+  — `activity_ledger` (every read_doc / touch_allowed / touch_blocked event, per
+  session; aggregate per day with `date(ts,'unixepoch')`) and `session_reads`
+  (`read_via` splits unlocks into `read_file` vs `infra_query`). Cross-reference
+  session ids against `sessions.source` in `~/.hermes/state.db` to attribute usage
+  gaps by surface. sqlite timestamps need the `'unixepoch'` modifier; parse
+  `messages.tool_calls` with python sqlite3+json, not piped CLI line output.
+
+## 7. Changing the gate or the protocol itself
+
+The gate is plugin code, not prose. A rule that lives only in a skill is a
+suggestion; a rule in `hooks.py`/`matcher.py` holds regardless of model, skill or
+session. When asked to make agents behave differently around the registry, change
+the code and prove it with a test — don't just edit skill text.
+
+- **Plan before you build.** A question like "what's the best way to achieve
+  this?" is a request for the plan, not the implementation. Present the plan,
+  name the open decisions, and wait for the go-ahead — especially for
+  infra-changing work on the club's own tooling.
+- **Place the gate before any early return.** The registry write veto runs
+  *before* the `guardrail_mode == "off"` check, because the two answer different
+  questions: the read-before-touch gate protects *hosts*, the write gate protects
+  the KB's single writer. Put it after that return and it silently disables
+  itself whenever the host guardrail is off — which is exactly when someone is
+  doing bulk work.
+- **A gate with no sanctioned exit is an obstacle.** Cover only the files
   `infra_upsert` owns (`servers/`, `services/`, `projects/` entries, `INDEX.md`).
   `conventions.md`, `LIVE-STATE.md`, tracker files and
   log dirs have no tool path — leave them hand-editable, or agents route around
