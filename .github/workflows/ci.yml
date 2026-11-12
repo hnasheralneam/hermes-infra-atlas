@@ -39,16 +39,27 @@ jobs:
       - name: Compile the Python half
         run: |
           python -m compileall -q \
-            atlas_tools.py config.py fusion.py hooks.py matcher.py registry_kb.py \
-            schemas.py store.py uptime.py collectors dashboard
-      - name: Every declared tool has a schema
+            __init__.py atlas_tools.py config.py credentials.py fusion.py hooks.py matcher.py \
+            registry_kb.py schemas.py store.py uptime.py collectors dashboard
+      - name: Every declared tool has a schema and matches catalog entry
         run: |
           python - <<'PY'
           import re, sys
           manifest = open("plugin.yaml").read()
+          catalog = open("catalog/infra-atlas.yaml").read()
           tools = re.findall(r"^\s+-\s+(\w+)$", manifest.split("provides_tools:")[1].split("provides_hooks:")[0], re.M)
+          cat_tools = re.findall(r"^\s+-\s+(\w+)$", catalog.split("provides_tools:")[1].split("provides_hooks:")[0], re.M)
+          hooks = re.findall(r"^\s+-\s+(\w+)$", manifest.split("provides_hooks:")[1].split("config_schema:")[0], re.M)
+          cat_hooks = re.findall(r"^\s+-\s+(\w+)$", catalog.split("provides_hooks:")[1].split("provides_middleware:")[0], re.M)
           schemas = open("schemas.py").read()
           missing = [t for t in tools if f'"{t}"' not in schemas]
           print("tools:", tools)
-          sys.exit(f"missing schema: {missing}") if missing else None
+          if missing:
+              sys.exit(f"missing schema: {missing}")
+          if tools != cat_tools:
+              sys.exit(f"catalog provides_tools {cat_tools} != plugin.yaml {tools}")
+          if hooks != cat_hooks:
+              sys.exit(f"catalog provides_hooks {cat_hooks} != plugin.yaml {hooks}")
+          if not re.search(r'^sha:\s*"[0-9a-f]{40}"', catalog, re.M):
+              sys.exit("catalog sha must be a 40-char hex SHA")
           PY

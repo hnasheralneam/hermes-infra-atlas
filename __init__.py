@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # Hermes imports this directory as the package ``hermes_plugins.infra_atlas``.
 # A test collector or a stray ``import __init__`` imports it as a bare module
@@ -18,13 +18,14 @@ from typing import Any
 # so the import is guarded and registration refuses politely in that case.
 _PACKAGE_MODE = bool(__package__)
 
-if _PACKAGE_MODE:
+if _PACKAGE_MODE or TYPE_CHECKING:
     from . import config
     from . import hooks
     from . import schemas
+    from . import atlas_cli
     from . import atlas_tools as tools
 else:  # pragma: no cover - never the Hermes load path
-    config = hooks = schemas = tools = None  # type: ignore[assignment]
+    config = hooks = schemas = atlas_cli = tools = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -164,40 +165,42 @@ def _register_blueprint(ctx) -> None:
 
 
 def _register_command(ctx) -> None:
+    """``/atlas …`` in any chat session — same subcommands as ``hermes atlas``."""
+
     def handle(raw_args: str) -> str:
-        try:
-            from .store import get_store
+        from . import atlas_cli
 
-            store = get_store()
-            counts = store.counts()
-            incidents = store.list_incidents(statuses=["open", "healing", "escalated"])
-            lines = [
-                f"Infra Atlas — {counts['total']} nodes: {counts['matched']} matched, "
-                f"{counts['changed']} changed, {counts['unregistered']} unregistered, {counts['stale']} stale",
-                f"Guardrail: {config.guardrail_mode()} · Downtime response: {config.auto_heal_mode()} · "
-                f"Registry: {config.registry_root()}",
-            ]
-            if incidents:
-                lines.append(f"Open incidents ({len(incidents)}):")
-                for incident in incidents[:5]:
-                    lines.append(f"  #{incident['id']} {incident['node_label']} — {incident['trigger_error']}")
-            else:
-                lines.append("No open incidents.")
-            if not raw_args.strip():
-                lines.append("Tip: /atlas sweep · /atlas drift · open the Infra Atlas page in the desktop app.")
-            elif raw_args.strip().startswith("sweep"):
-                from . import fusion
-
-                summary = fusion.run_sweep()
-                lines = [f"Sweep {summary['sweep_id']} in {summary['duration_ms']}ms: {summary['counts']}"]
-            return "\n".join(lines)
-        except Exception as exc:  # noqa: BLE001
-            return f"infra-atlas: {type(exc).__name__}: {exc}"
+        return atlas_cli.slash(raw_args)
 
     try:
-        ctx.register_command("atlas", handle, description="Infra Atlas status, or `/atlas sweep`")
+        ctx.register_command(
+            "atlas",
+            handle,
+            description="Infrastructure atlas: node list, drift, incidents/downtime, uptime, registry entries",
+            args_hint="status|nodes|drift|incidents|uptime|entries|show|cat|activity|creds|sweep",
+        )
     except Exception:  # noqa: BLE001
         logger.warning("infra-atlas: slash command registration failed", exc_info=True)
+
+
+def _register_cli(ctx) -> None:
+    """``hermes atlas …`` from a shell — the CLI half of the same surface."""
+    from . import atlas_cli
+
+    try:
+        ctx.register_cli_command(
+            name="atlas",
+            help="Infrastructure atlas: nodes, drift, downtime, uptime, registry entries",
+            setup_fn=atlas_cli.register_cli,
+            handler_fn=atlas_cli.atlas_command,
+            description=(
+                "Read the infrastructure knowledge base and the last sweep without opening the desktop "
+                "page: `hermes atlas status|nodes|drift|incidents|uptime|entries|show <id>|cat <id>|"
+                "activity|creds|sweep`."
+            ),
+        )
+    except Exception:  # noqa: BLE001 - an older Hermes without CLI registration must still load
+        logger.warning("infra-atlas: CLI command registration failed", exc_info=True)
 
 
 def register(ctx) -> None:  # noqa: D401 - host entrypoint
@@ -214,4 +217,5 @@ def register(ctx) -> None:  # noqa: D401 - host entrypoint
     _register_skill(ctx)
     _register_blueprint(ctx)
     _register_command(ctx)
+    _register_cli(ctx)
     logger.debug("infra-atlas registered: %s", json.dumps(sorted(schemas.ALL)))

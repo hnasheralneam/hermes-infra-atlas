@@ -49,15 +49,25 @@ def collect() -> CollectorResult:
         return result
 
     nodes = None
+    attempt_errors: list[str] = []
     for path in ("/api/v1/node", "/api/v1/machine"):
         try:
             payload = _fetch(base, path, key)
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            result.errors.append(f"headscale {path}: {exc}")
+            attempt_errors.append(f"headscale {path}: {exc}")
             continue
-        nodes = payload.get("nodes") or payload.get("machines") if isinstance(payload, dict) else payload
-        if nodes:
+        if isinstance(payload, dict) and ("nodes" in payload or "machines" in payload):
+            nodes = payload.get("nodes") if "nodes" in payload else payload.get("machines")
+            attempt_errors = []
             break
+        if isinstance(payload, list):
+            nodes = payload
+            attempt_errors = []
+            break
+        if isinstance(payload, dict):
+            attempt_errors.append(f"headscale {path}: unexpected payload keys {sorted(payload)[:5]}")
+    if attempt_errors:
+        result.errors.extend(attempt_errors)
     if not nodes:
         return result
 

@@ -20,8 +20,24 @@ if [[ ! -d "$HERMES_AGENT/agent" ]]; then
   exit 2
 fi
 MODULES="${ATLAS_NODE_MODULES:-$HERMES_AGENT/node_modules}"
-# `python3` on PATH may be a Hermes venv without the test deps; find one with pytest.
+if [[ ! -d "$MODULES/react" ]]; then
+  for candidate_mod in ./node_modules "$HOME"/work/*/web/node_modules; do
+    if [[ -d "$candidate_mod/react" && -d "$candidate_mod/react-dom" && -d "$candidate_mod/jsdom" ]]; then
+      MODULES="$candidate_mod"
+      break
+    fi
+  done
+fi
+# `python3` on PATH may be a Hermes venv without the test deps; find one with pytest (preferring ruamel.yaml too).
 PYTHON="${ATLAS_PYTHON:-}"
+if [[ -z "$PYTHON" ]]; then
+  for candidate in python3 /usr/bin/python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "import pytest, ruamel.yaml" >/dev/null 2>&1; then
+      PYTHON="$candidate"
+      break
+    fi
+  done
+fi
 if [[ -z "$PYTHON" ]]; then
   for candidate in python3 /usr/bin/python3; do
     if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "import pytest" >/dev/null 2>&1; then
@@ -42,7 +58,7 @@ fi
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
 step "python: compile every module"
-"$PYTHON" -m compileall -q atlas_tools.py config.py credentials.py fusion.py hooks.py matcher.py registry_kb.py \
+"$PYTHON" -m compileall -q __init__.py atlas_cli.py atlas_tools.py config.py credentials.py fusion.py hooks.py matcher.py registry_kb.py \
   schemas.py store.py uptime.py collectors dashboard
 echo ok
 
@@ -56,8 +72,22 @@ node tools/render_smoke.mjs --modules "$MODULES"
 step "desktop: pan, zoom, layout"
 node tools/viewport_test.mjs --modules "$MODULES"
 
-step "manifest: hermes plugins validate"
-hermes plugins validate . >/dev/null && echo ok
+step "manifest: hermes plugins doctor + validate + catalog parity"
+hermes plugins doctor . --ci >/dev/null
+hermes plugins validate . >/dev/null
+"$PYTHON" - <<'PY'
+import re, sys
+manifest = open("plugin.yaml").read()
+catalog = open("catalog/infra-atlas.yaml").read()
+p_tools = re.findall(r"^\s+-\s+(\w+)$", manifest.split("provides_tools:")[1].split("provides_hooks:")[0], re.M)
+c_tools = re.findall(r"^\s+-\s+(\w+)$", catalog.split("provides_tools:")[1].split("provides_hooks:")[0], re.M)
+p_hooks = re.findall(r"^\s+-\s+(\w+)$", manifest.split("provides_hooks:")[1].split("config_schema:")[0], re.M)
+c_hooks = re.findall(r"^\s+-\s+(\w+)$", catalog.split("provides_hooks:")[1].split("provides_middleware:")[0], re.M)
+assert p_tools == c_tools, f"catalog provides_tools {c_tools} != plugin.yaml {p_tools}"
+assert p_hooks == c_hooks, f"catalog provides_hooks {c_hooks} != plugin.yaml {p_hooks}"
+assert re.search(r'^sha:\s*"[0-9a-f]{40}"', catalog, re.M), "catalog sha must be a 40-char hex SHA"
+PY
+echo ok
 
 step "python: pytest"
 PYTHONPATH="$HERMES_AGENT" "$PYTHON" -m pytest -q

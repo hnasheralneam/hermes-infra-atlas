@@ -45,13 +45,19 @@ for (const level of ['error', 'warn']) {
 
 const React = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { HOST_CALLS } = await import('@hermes/plugin-sdk')
 const module = await import('./plugin.mjs')
 const plugin = module.default
 const { planScene } = module
 
 const surfaces = []
 plugin.register({
-  rest: async () => ({}),
+  // The page reads /brief (Ask Hermes), /heal, /reconcile and /graph; the brief
+  // is the only one whose text the harness asserts on.
+  rest: async (path) =>
+    String(path).includes('/brief')
+      ? { ok: true, node_id: 'lxc-202-cache', brief: 'BRIEF lxc-202-cache: drift changed, 1 reason' }
+      : {},
   storage: { get: async () => null, set: async () => {}, delete: async () => {} },
   onEvent: () => () => {},
   register: item => {
@@ -247,6 +253,7 @@ if (nodeEl) {
   check('the drawer names the node', text.includes('cache-tank'), text.slice(0, 80))
   check('the drawer shows the drift diff', text.includes('10.20.0.30') && text.includes('10.20.0.22'))
   check('the drawer surfaces the documented pitfall', text.includes('Dial 10.20.0.22:6379'))
+  check('the drawer renders masked vault credentials', text.includes('Vault Credentials') && text.includes('cache-tank-auth'))
   const tabs = Array.from(window.document.querySelectorAll('.ia-drawer-tabs button'))
   check('the drawer has overview / uptime / runbook tabs', tabs.length === 3, tabs.map(tab => tab.textContent).join('|'))
   const uptimeTab = tabs.find(tab => /uptime/i.test(tab.textContent || ''))
@@ -265,6 +272,54 @@ if (nodeEl) {
     })
     check('the runbook tab renders the markdown body', window.document.querySelector('.ia-drawer').textContent.includes('Dial 10.20.0.22:6379'))
   }
+
+  // ── Ask Hermes opens a chat with the brief ───────────────────────────────
+  // The button used to paste into whatever chat happened to be focused, which
+  // from the atlas page usually meant no chat at all: nothing visible happened.
+  const askButton = Array.from(window.document.querySelectorAll('.ia-drawer button')).find(button =>
+    /Ask Hermes/.test(button.textContent || '')
+  )
+  check('the drawer offers an Ask Hermes action', Boolean(askButton), 'no Ask Hermes button')
+  if (askButton) {
+    await React.act(async () => {
+      askButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+      await new Promise(resolve => setTimeout(resolve, 260))
+    })
+    check('Ask Hermes starts a new chat', HOST_CALLS.newChat === 1, `newChat calls: ${HOST_CALLS.newChat}`)
+    const sent = HOST_CALLS.submitted[0]
+    check('Ask Hermes submits the brief into the fresh draft', Boolean(sent) && sent.sessionId === 'new', JSON.stringify(sent || {}).slice(0, 120))
+    check('the brief names the node it opened for', Boolean(sent) && String(sent.text).includes('lxc-202-cache'), String(sent && sent.text).slice(0, 80))
+    const toast = HOST_CALLS.notified[HOST_CALLS.notified.length - 1]
+    check('the operator is told what happened', Boolean(toast) && /chat/i.test(String(toast.message)), JSON.stringify(toast || {}))
+  }
+}
+
+// ── legend & filter badge exactness ────────────────────────────────────────
+const legendBtn = window.document.querySelector('.ia-map-legend')
+if (legendBtn) {
+  await React.act(async () => {
+    legendBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setTimeout(resolve, 40))
+  })
+  const infRow = Array.from(window.document.querySelectorAll('.ia-legend-row')).find(r =>
+    (r.textContent || '').includes('Inference server')
+  )
+  check('legend draws the dual-fan GPU glyph for inference servers', Boolean(infRow && infRow.querySelectorAll('circle').length === 2))
+  // The drift tags are jargon ("matched") until the legend says what they mean.
+  const legendText = window.document.querySelector('.ia-legend-card').textContent
+  check('legend explains the drift tags', /Drift Tags/.test(legendText) && /reality agree/i.test(legendText), legendText.slice(0, 120))
+  const expectedTags = ['Matched', 'Drift', 'Unregistered', 'Stale', 'Peer', 'Doc only']
+  check('legend explains every tag the map can draw', expectedTags.every(tag => legendText.includes(tag)), expectedTags.join('|'))
+}
+const alertsSeg = Array.from(window.document.querySelectorAll('.ia-seg-btn')).find(b => /^Alerts/i.test(b.textContent || ''))
+if (alertsSeg) {
+  const expectedAlerts = Number(alertsSeg.querySelector('.ia-seg-count')?.textContent || '-1')
+  await React.act(async () => {
+    alertsSeg.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setTimeout(resolve, 40))
+  })
+  const drawnAlerts = window.document.querySelectorAll('[data-node-id]').length
+  check('Alerts segment badge equals the exact count of nodes drawn', drawnAlerts === expectedAlerts, `badge=${expectedAlerts}, drawn=${drawnAlerts}`)
 }
 
 // ── terrace packing ────────────────────────────────────────────────────────

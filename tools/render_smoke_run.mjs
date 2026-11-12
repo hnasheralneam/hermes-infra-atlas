@@ -115,13 +115,13 @@ if (!/data-build="[0-9A-Za-z._-]{4,}"/.test(page?.html || '')) {
 }
 console.log('ok   page exposes data-build for reload verification')
 
-for (const token of ['var(--foreground', 'var(--card', 'var(--muted-foreground']) {
+for (const token of ['var(--foreground', 'var(--card', 'var(--muted-foreground', 'var(--ia-well)']) {
   if (!(page?.html || '').includes(token)) {
     console.log(`FAIL the page does not consume the frame theme token ${token})`)
     process.exit(1)
   }
 }
-console.log('ok   page consumes the frame theme tokens (foreground, card, muted)')
+console.log('ok   page consumes the frame theme tokens (foreground, card, muted, well)')
 
 // Docker containers and inference servers must be visually distinct from services.
 const classes = page?.html || ''
@@ -141,12 +141,16 @@ if (!classes.includes('ia-door') || !classes.includes('ia-heat')) {
 console.log(`ok   containers draw a crate, inference servers draw GPU fans (${fans} fans, heat shimmer present)`)
 
 const drawn = (page?.html?.match(/data-node-id="/g) || []).length
-const allBadge = page?.html?.match(/<span class="ia-seg-count">(\d+)<\/span>/g) || []
+const segCounts = Array.from((page?.html || '').matchAll(/<span class="ia-seg-count">(\d+)<\/span>/g)).map(m => Number(m[1]))
 if (!drawn) {
   console.log('FAIL page drew no nodes at all')
   process.exit(1)
 }
-console.log(`ok   ${drawn} nodes drawn (retired excluded)`)
+if (segCounts[0] !== drawn) {
+  console.log(`FAIL Live segment badge (${segCounts[0]}) != drawn nodes (${drawn})`)
+  process.exit(1)
+}
+console.log(`ok   ${drawn} nodes drawn (Live badge=${segCounts[0]}, All badge=${segCounts[3]}, retired excluded)`)
 
 const uniqueWarnings = [...new Set(reactWarnings)]
 if (uniqueWarnings.length) {

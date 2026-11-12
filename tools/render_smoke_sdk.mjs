@@ -35,6 +35,7 @@ export const FIXTURE = {
       { source_id: 'srv-pve', target_id: 'ct-redis', relation: 'hosts' },
       { source_id: 'vm-101-ops', target_id: 'svc-render', relation: 'hosts' },
       { source_id: 'lxc-202-cache', target_id: 'svc-gateway', relation: 'hosts' },
+      { source_id: 'lxc-202-cache', target_id: 'ct-docker-wazuh', relation: 'hosts' },
       { source_id: 'vm-101-ops', target_id: 'proj-migration', relation: 'hosts' },
       { source_id: 'agent-hermes', target_id: 'cron-backups', relation: 'hosts' },
       { source_id: 'agent-hermes', target_id: 'mdl-gpt-bridge', relation: 'uses_model' },
@@ -42,9 +43,10 @@ export const FIXTURE = {
       { source_id: 'svc-gateway', target_id: 'ct-redis', relation: 'depends_on' }
     ],
     incidents: [{ id: 7, node_id: 'svc-render', node_label: 'render-farm', status: 'open', trigger_error: 'connect refused 10.20.0.32:8081', opened_at: 1794000000, attempts: 1 }],
-    counts: { matched: 9, changed: 1, unregistered: 1, stale: 1, observed: 1, doc_only: 2, total: 14 },
+    counts: { matched: 9, changed: 1, unregistered: 0, stale: 1, observed: 1, doc_only: 2, total: 14 },
     fleet: { monitored_nodes: 11, down_nodes: 1, avg_uptime_24h_pct: 98.6 },
     last_sweep: { sweep_id: 'sw-1', finished_at: 1794000100, duration_ms: 900 },
+    watchdog: { installed: true, scheduled: true, job_id: 'wd-1', enabled: true, schedule: 'every 5m' },
     activity: [{ ts: 1794000000, session_id: 's1', tool_name: 'terminal', node_id: 'svc-render', action_kind: 'touch_blocked', blocked: 1, summary: 'ssh root@10.20.0.32' }],
     config: { guardrail_mode: 'block', auto_heal_mode: 'auto' }
   },
@@ -57,6 +59,11 @@ export const FIXTURE = {
       live_state: { host_ip: '10.20.0.22', ports: [6379] },
       drift_reasons: ['host_ip: registry says 10.20.0.30, live is 10.20.0.22'],
       uptime_24h_pct: 99.4, latency_ms: 12, pitfalls_summary: 'Dial 10.20.0.22:6379 directly.'
+    },
+    credentials: {
+      declared: ['cache-tank-auth'],
+      refs: [{ name: 'cache-tank-auth', stored: true, kind: 'password' }],
+      missing: []
     },
     diff: [{ field: 'host_ip', doc: '10.20.0.30', live: '10.20.0.22', state: 'changed' }],
     blast_radius: { upstream: [{ id: 'srv-pve', label: 'pve-one', kind: 'server' }], downstream: [{ id: 'svc-gateway', label: 'edge-gateway', kind: 'service' }] },
@@ -73,11 +80,31 @@ export const useQuery = options => {
   return { data, isLoading: false, isPending: false, error: null, refetch: async () => data }
 }
 
+// Every host call the page makes, so the interaction harness can assert that a
+// button actually did something instead of only that it rendered.
+export const HOST_CALLS = { newChat: 0, submitted: [], drafts: [], notified: [] }
+
 export const host = {
   navigate: () => {},
-  notify: () => {},
+  notify: payload => {
+    HOST_CALLS.notified.push(payload)
+  },
   onEvent: () => () => {},
   request: async () => ({ ok: true }),
+  // Same door the real SDK exposes: a fresh chat draft, no session id yet.
+  newChat: () => {
+    HOST_CALLS.newChat += 1
+  },
   state: { focusedSessionId: { get: () => 'session-render' } },
-  composer: { submit: () => {}, setDraft: () => {}, focus: () => {} }
+  composer: {
+    submit: (sessionId, text) => {
+      HOST_CALLS.submitted.push({ sessionId, text })
+      return true
+    },
+    setDraft: async (sessionId, text) => {
+      HOST_CALLS.drafts.push({ sessionId, text })
+      return true
+    },
+    focus: () => {}
+  }
 }

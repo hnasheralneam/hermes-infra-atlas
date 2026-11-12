@@ -146,6 +146,7 @@ async def graph() -> dict[str, Any]:
     counts = store.counts()
     incidents = store.list_incidents(statuses=["open", "healing", "escalated"], limit=25)
     sweep = store.latest_sweep()
+    tools_mod = _plugin_module("atlas_tools")
     return _json(
         {
             "nodes": nodes,
@@ -154,6 +155,7 @@ async def graph() -> dict[str, Any]:
             "fleet": store.fleet_uptime(),
             "incidents": incidents,
             "last_sweep": sweep,
+            "watchdog": tools_mod._watchdog_status(),
             "config": {
                 "guardrail_mode": config.guardrail_mode(),
                 "auto_heal_mode": config.auto_heal_mode(),
@@ -184,6 +186,7 @@ async def node_detail(node_id: str) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             markdown = f"_(could not read {node['registry_path']}: {exc})_"
     incidents = store.list_incidents(limit=20, node_id=node["id"])
+    vault = _plugin_module("credentials")
     return _json(
         {
             "node": node,
@@ -192,12 +195,14 @@ async def node_detail(node_id: str) -> dict[str, Any]:
             "incidents": incidents,
             "activity": store.recent_activity(limit=30, node_id=node["id"]),
             "registry_markdown": markdown,
+            "credentials": vault.node_credentials(node["id"], node),
             "diff": _field_diff(node),
         }
     )
 
 
 def _field_diff(node: dict[str, Any]) -> list[dict[str, Any]]:
+    fusion = _plugin_module("fusion")
     doc = node.get("doc_state") or {}
     live = node.get("live_state") or {}
     diffs = []
@@ -210,7 +215,7 @@ def _field_diff(node: dict[str, Any]) -> list[dict[str, Any]]:
         if right in (None, "", []):
             # The live side simply has nothing to say about this field.
             continue
-        if field == "managed_by" and {str(left).strip().lower(), str(right).strip().lower()} <= {"host", "proxmox"}:
+        if field == "managed_by" and fusion.compatible_managed_by(left, right, str(node.get("kind") or "")):
             continue
         if json.dumps(left, sort_keys=True, default=str) != json.dumps(right, sort_keys=True, default=str):
             diffs.append({"field": field, "doc": left, "live": right})
@@ -251,6 +256,7 @@ async def reconcile(body: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "id": node["id"],
         "kind": node.get("kind") or "service",
+        "registry_path": node.get("registry_path"),
         "label": node.get("label"),
         "host_ip": node.get("host_ip"),
         "tailnet_ip": node.get("tailnet_ip"),
@@ -290,6 +296,33 @@ async def reconcile(body: dict[str, Any]) -> dict[str, Any]:
     _plugin_module("matcher").refresh()
     _broadcast("node.updated", {"node_id": node["id"], "action": action})
     return {"ok": True, "node_id": node["id"], "registry_path": result.get("registry_path"), "action": action}
+
+
+@router.post("/brief")
+async def brief(body: dict[str, Any]) -> dict[str, Any]:
+    """The text "Ask Hermes" starts a chat with: what this node is, and what to do.
+
+    State-aware on purpose — a healthy, matched node gets an inspection mission,
+    a drifted one gets reconciliation, a down one gets the recovery playbook.
+    """
+    store = _store()
+    uptime = _plugin_module("uptime")
+    node = store.get_node(str(body.get("node_id") or "")) or store.find_node(str(body.get("node_id") or ""))
+    if not node:
+        return _json({"ok": False, "error": "unknown node"})
+    incident = store.active_incident_for(node["id"])
+    store.record_session_read("desktop", node["id"], "desktop")
+    text = uptime.dispatch_brief(store, node, incident)
+    return _json(
+        {
+            "ok": True,
+            "node_id": node["id"],
+            "label": node.get("label"),
+            "brief": text,
+            "drift_status": node.get("drift_status"),
+            "health_status": node.get("health_status"),
+        }
+    )
 
 
 @router.post("/heal")
@@ -363,9 +396,16 @@ async def resolve_incident(incident_id: int, body: Optional[dict[str, Any]] = No
 @router.post("/watchdog")
 async def watchdog(body: dict[str, Any]) -> dict[str, Any]:
     uptime = _plugin_module("uptime")
+    tools_mod = _plugin_module("atlas_tools")
     path = uptime.install_watchdog_script(PLUGIN_ROOT)
-    _broadcast("watchdog.installed", {"path": str(path)})
-    return {"ok": True, "script": str(path), "hint": "Schedule it with infra_incidents(action='setup_watchdog') in a chat."}
+    status = tools_mod._watchdog_status()
+    _broadcast("watchdog.installed", {"path": str(path), "status": status})
+    return {
+        "ok": True,
+        "script": str(path),
+        "watchdog": status,
+        "hint": "Schedule or pause it with infra_incidents(action='setup_watchdog') in a chat.",
+    }
 
 
 @router.post("/session-unlock")

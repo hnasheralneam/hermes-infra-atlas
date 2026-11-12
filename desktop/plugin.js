@@ -31,6 +31,14 @@ const DRIFT_LABEL = {
   observed: 'Peer',
   doc_only: 'Doc only'
 }
+const DRIFT_MEANING = {
+  matched: 'Registry entry and live reality agree — nothing to reconcile.',
+  changed: 'Alive, but different: address, port, unit or parent disagrees with the entry.',
+  unregistered: 'Running with no registry entry at all — undocumented infrastructure.',
+  stale: 'Documented as active, but nothing answers its probe.',
+  observed: 'Seen on the tailnet only: no entry, nothing probed.',
+  doc_only: 'Nothing to probe — a project entry, or one retired from service.'
+}
 const HEALTH_COLOR = {
   up: 'var(--ui-success, #10b981)',
   degraded: 'var(--ui-warning, #f59e0b)',
@@ -39,7 +47,7 @@ const HEALTH_COLOR = {
 }
 const DRIFT_COLOR = {
   matched: 'var(--ui-success, #10b981)',
-  changed: 'var(--ui-warning, #f59e0b)',
+  changed: 'var(--ia-warn-ink, var(--ui-warning, #f59e0b))',
   unregistered: 'var(--ui-info, #06b6d4)',
   stale: 'var(--ui-danger, #ef4444)',
   observed: 'var(--muted-foreground, var(--ui-text-tertiary, #8b8f98))',
@@ -113,7 +121,7 @@ function useNode(nodeId) {
 
 // Bumped whenever the bundle changes, so a reload can be verified from the page:
 //   document.querySelector('.ia-root').dataset.build
-const BUILD = '20261110-1552'
+const BUILD = '20261111-ask-session'
 
 const ISO = { tileW: 64, tileH: 32, stepZ: 13, slab: 10, pitch: 2, pad: 30 }
 const ISO_HW = ISO.tileW / 2
@@ -1049,13 +1057,20 @@ const IsoNode = React.memo(function IsoNode({ node, info, active, pulse, fresh, 
           jsx('circle', { cx: 0, cy: -top - 4, r: 2.5, className: cn('ia-beacon', `ia-beacon-${health}`), style: { fill: HEALTH_COLOR[health] || HEALTH_COLOR.unknown } }),
           drift !== 'matched' && drift !== 'observed' && drift !== 'doc_only'
             ? jsxs('g', { className: 'ia-chipf', style: { animationDelay: `${(seeded(node.id, 21) * 3).toFixed(2)}s` }, children: [
+                jsx('title', { children: `${DRIFT_LABEL[drift] || drift}: ${DRIFT_MEANING[drift] || 'no explanation recorded'}` }),
                 jsx('rect', { x: -(DRIFT_LABEL[drift] || drift).length * 2.9 - 6, y: -(top + 48), width: (DRIFT_LABEL[drift] || drift).length * 5.8 + 12, height: 13, rx: 6.5, className: 'ia-chip-box', style: { stroke: driftColor } }),
                 jsx('text', { x: 0, y: -(top + 38.5), textAnchor: 'middle', className: 'ia-chip-text', style: { fill: driftColor }, children: DRIFT_LABEL[drift] || drift })
               ] })
             : null,
           jsx('text', { x: 0, y: -(top + 26), textAnchor: 'middle', className: 'ia-node-title', children: title }),
           showTitle && (showAddress || active)
-            ? jsx('text', { x: 0, y: -(top + 15), textAnchor: 'middle', className: 'ia-node-sub2', children: node.vmid ? `${sub} · vm ${node.vmid}` : sub })
+            ? jsx('text', {
+                x: 0,
+                y: -(top + 15),
+                textAnchor: 'middle',
+                className: 'ia-node-sub2',
+                children: node.vmid ? `${sub} · ${node.kind === 'lxc' ? 'lxc' : 'vm'} ${node.vmid}` : sub
+              })
             : null
         ]
       })
@@ -1679,6 +1694,13 @@ const LegendGlyph = React.memo(function LegendGlyph({ kind }) {
         jsx('path', { d: 'M 4.5 4 V 11 M 7.5 4 V 11 M 10.5 4 V 11 M 13.5 4 V 11', stroke: c, strokeWidth: 0.8, fill: 'none', opacity: 0.7 }, 'p')
       ]
       break
+    case 'gpu':
+      inner = [
+        jsx('rect', { x: 1, y: 3, width: 16, height: 8, rx: 1.2, ...common }, 'r'),
+        jsx('circle', { cx: 5.7, cy: 7, r: 2.3, fill: '#141d2c', stroke: c, strokeWidth: 1.05 }, 'f1'),
+        jsx('circle', { cx: 12.3, cy: 7, r: 2.3, fill: '#141d2c', stroke: c, strokeWidth: 1.05 }, 'f2')
+      ]
+      break
     case 'plate':
       inner = jsx('rect', { x: 2, y: 5, width: 14, height: 5, ...common })
       break
@@ -1720,6 +1742,11 @@ const LEGEND_KINDS = [
 const LEGEND_LINKS = [
   ['hosts', 'Hosts'], ['depends_on', 'Depends on'], ['uses_model', 'Uses model'],
   ['provides_model', 'Provides model'], ['monitors', 'Monitors'], ['proxies_to', 'Proxies to']
+]
+// Every tag the map can draw, in the order the sweep cares about them.
+const DRIFT_TAGS = [
+  ['matched', 'Matched'], ['changed', 'Drift'], ['unregistered', 'Unregistered'],
+  ['stale', 'Stale'], ['observed', 'Peer'], ['doc_only', 'Doc only']
 ]
 
 // ── page & floating chrome ─────────────────────────────────────────────────
@@ -1841,17 +1868,18 @@ function InfraAtlasPage() {
   const fleet = (data && data.fleet) || {}
   const incidents = (data && data.incidents) || []
   const config = (data && data.config) || {}
+  const watchdog = (data && data.watchdog) || {}
   const lastSweep = (data && data.last_sweep) || null
   const sessionReads = (data && data.session_reads) || []
 
-  const attentionCount = (counts.changed || 0) + (counts.unregistered || 0) + (counts.stale || 0)
-  const activeCount = (counts.matched || 0) + attentionCount
-
   // A retired entry documents something that no longer exists: drawing it as an
   // empty box on the hardware terrace is noise, and its panel has no telemetry
-  // to show. Keep the map to infrastructure that is (or should be) real.
+  // to show. Keep the map and every filter badge to infrastructure that is live.
   const isRetired = node => String((node.doc_state && node.doc_state.status) || node.doc_status || '') === 'removed'
   const sceneNodes = nodes.filter(node => !isRetired(node))
+  const matchedCount = sceneNodes.filter(node => (DRIFT_GROUP[node.drift_status] || 'other') === 'matched').length
+  const attentionCount = sceneNodes.filter(node => (DRIFT_GROUP[node.drift_status] || 'other') === 'attention').length
+  const activeCount = matchedCount + attentionCount
 
   const visible = sceneNodes.filter(node => {
     const group = DRIFT_GROUP[node.drift_status] || 'other'
@@ -1991,7 +2019,7 @@ function InfraAtlasPage() {
             children: [
               segButton('active', 'Live', activeCount, filter, setFilter),
               segButton('attention', 'Alerts', attentionCount, filter, setFilter, attentionCount > 0 ? 'warn' : ''),
-              segButton('matched', 'Synced', counts.matched || 0, filter, setFilter),
+              segButton('matched', 'Synced', matchedCount, filter, setFilter),
               segButton('all', 'All', sceneNodes.length, filter, setFilter)
             ]
           }),
@@ -2099,7 +2127,22 @@ function InfraAtlasPage() {
                             )
                           }),
                           jsx('div', { className: 'ia-pop-sep' }),
-                          jsx('div', { className: 'ia-pop-title', children: 'Background Uptime Watchdog' }),
+                          jsxs('div', {
+                            className: 'ia-section-head-row',
+                            children: [
+                              jsx('div', { className: 'ia-pop-title', children: 'Uptime Watchdog' }),
+                              jsx('span', {
+                                className: cn('ia-badge', watchdog.scheduled && watchdog.enabled ? 'ia-badge-ok' : 'ia-badge-neutral'),
+                                children: watchdog.scheduled
+                                  ? watchdog.enabled
+                                    ? `Active${watchdog.schedule ? ' · ' + watchdog.schedule : ''}`
+                                    : 'Paused'
+                                  : watchdog.installed
+                                    ? 'Script ready'
+                                    : 'Off'
+                              })
+                            ]
+                          }),
                           jsx('div', {
                             className: 'ia-pop-desc',
                             children: 'Zero-token Hermes cron pre-check that only wakes the agent when an endpoint is down.'
@@ -2109,27 +2152,46 @@ function InfraAtlasPage() {
                             children: [
                               jsx('button', {
                                 type: 'button',
-                                className: 'ia-choice',
+                                className: cn('ia-choice', watchdog.scheduled && watchdog.enabled && 'ia-choice-on'),
                                 disabled: Boolean(busy),
                                 onClick: () =>
                                   runWithBusy(setBusy, 'watchdog', async () => {
-                                    const res = await rest('/watchdog', { method: 'POST', body: { enabled: true, interval_min: 2 } })
-                                    host.notify({
-                                      kind: res && res.ok !== false ? 'info' : 'warning',
-                                      message: res && res.ok !== false ? 'Uptime watchdog enabled (every 2m)' : 'Watchdog script installed'
-                                    })
+                                    const res = await rest('/watchdog', { method: 'POST', body: { enabled: true, interval_min: 5 } })
+                                    const w = (res && res.watchdog) || {}
+                                    if (!w.scheduled || !w.enabled) {
+                                      const sid = host.state && host.state.focusedSessionId && host.state.focusedSessionId.get ? host.state.focusedSessionId.get() : null
+                                      const sent = host.composer && host.composer.submit
+                                        ? host.composer.submit(sid ?? null, 'Run infra_incidents(action="setup_watchdog", interval_min=5, enabled=true) to activate the Infra Atlas uptime watchdog.')
+                                        : false
+                                      host.notify({
+                                        kind: 'info',
+                                        message: sent
+                                          ? 'Watchdog script refreshed — scheduling via active chat'
+                                          : 'Watchdog script installed; run infra_incidents(action="setup_watchdog") in chat to schedule cron'
+                                      })
+                                    } else {
+                                      host.notify({ kind: 'info', message: `Watchdog script refreshed (${w.schedule || 'scheduled'})` })
+                                    }
                                     await refetch()
                                   }),
-                                children: 'Enable (2m)'
+                                children: watchdog.scheduled && watchdog.enabled ? 'Refresh Script' : 'Enable (5m)'
                               }),
                               jsx('button', {
                                 type: 'button',
-                                className: 'ia-choice',
-                                disabled: Boolean(busy),
+                                className: cn('ia-choice', watchdog.scheduled && !watchdog.enabled && 'ia-choice-on'),
+                                disabled: Boolean(busy) || !watchdog.scheduled,
                                 onClick: () =>
                                   runWithBusy(setBusy, 'watchdog', async () => {
-                                    await rest('/watchdog', { method: 'POST', body: { enabled: false } })
-                                    host.notify({ kind: 'info', message: 'Uptime watchdog paused' })
+                                    const sid = host.state && host.state.focusedSessionId && host.state.focusedSessionId.get ? host.state.focusedSessionId.get() : null
+                                    const sent = host.composer && host.composer.submit
+                                      ? host.composer.submit(sid ?? null, 'Run infra_incidents(action="setup_watchdog", enabled=false) to pause the Infra Atlas uptime watchdog.')
+                                      : false
+                                    host.notify({
+                                      kind: sent ? 'info' : 'warning',
+                                      message: sent
+                                        ? 'Sent pause request to active chat'
+                                        : 'Open a chat and run infra_incidents(action="setup_watchdog", enabled=false) to pause cron'
+                                    })
                                     await refetch()
                                   }),
                                 children: 'Pause'
@@ -2233,6 +2295,23 @@ function InfraAtlasPage() {
                       }, rel)
                     })
                   }),
+                  jsx('div', { className: 'ia-legend-sub', children: 'Drift Tags' }),
+                  jsx('div', {
+                    className: 'ia-legend-rows',
+                    children: DRIFT_TAGS.map(([tag, label]) =>
+                      jsxs('div', {
+                        className: 'ia-legend-row ia-legend-row-wrap',
+                        children: [
+                          jsx('span', {
+                            className: 'ia-badge',
+                            style: { borderColor: DRIFT_COLOR[tag], color: DRIFT_COLOR[tag] },
+                            children: label
+                          }),
+                          jsx('span', { className: 'ia-legend-meaning', children: DRIFT_MEANING[tag] })
+                        ]
+                      }, tag)
+                    )
+                  }),
                   jsx('div', {
                     className: 'ia-legend-note',
                     children: `${nodes.length - sceneNodes.length} retired entr${nodes.length - sceneNodes.length === 1 ? 'y' : 'ies'} hidden from the map (still in the registry).`
@@ -2247,7 +2326,7 @@ function InfraAtlasPage() {
                 type: 'button',
                 className: 'ia-map-btn',
                 title: 'Zoom out (scroll or pinch anywhere on the map)',
-                onClick: () => (mapApi.current ? mapApi.current.zoomBy(1 / 1.25) : setZoom(z => Math.max(0.42, z / 1.25))),
+                onClick: () => (mapApi.current ? mapApi.current.zoomBy(1 / 1.25) : setZoom(z => Math.max(MIN_ZOOM, z / 1.25))),
                 children: '−'
               }),
               jsx('button', {
@@ -2265,7 +2344,7 @@ function InfraAtlasPage() {
                 type: 'button',
                 className: 'ia-map-btn',
                 title: 'Zoom in (scroll up, or double-click the map)',
-                onClick: () => (mapApi.current ? mapApi.current.zoomBy(1.25) : setZoom(z => Math.min(2.6, z * 1.25))),
+                onClick: () => (mapApi.current ? mapApi.current.zoomBy(1.25) : setZoom(z => Math.min(MAX_ZOOM, z * 1.25))),
                 children: '+'
               }),
               jsx('span', { className: 'ia-map-sep' }),
@@ -2436,10 +2515,11 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
   const drift = item.drift_status || 'matched'
   const health = item.health_status || 'unknown'
 
-  const activeSession =
+  const focusId =
     host.state && host.state.focusedSessionId && host.state.focusedSessionId.get
-      ? host.state.focusedSessionId.get() || 'desktop'
-      : 'desktop'
+      ? host.state.focusedSessionId.get() || null
+      : null
+  const activeSession = focusId || 'desktop'
   const isUnlocked = (sessionReads || []).some(
     r => r.node_id === item.id && (r.session_id === activeSession || r.session_id === 'desktop')
   )
@@ -2462,15 +2542,55 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
       await onRefetch()
     })
 
+  // "Ask Hermes" is a door, not a paste: it opens a chat of its own and starts
+  // it with this node's brief. Submitting into whatever chat happened to be
+  // focused left the brief invisible — no chat open, or queued behind an
+  // unrelated conversation — so the button did nothing an operator could see.
   const dispatchBrief = () =>
     runWithBusy(setBusy, `dispatch:${item.id}`, async () => {
-      const brief = await rest('/heal', { method: 'POST', body: { node_id: item.id, mode: 'agent_brief' } })
-      const sessionId = host.state.focusedSessionId && host.state.focusedSessionId.get ? host.state.focusedSessionId.get() : null
-      const sent = host.composer.submit(sessionId ?? null, brief.remediation_brief)
-      host.notify({
-        kind: sent ? 'info' : 'warning',
-        message: sent ? 'Remediation brief sent to active chat' : 'Open a chat to dispatch the brief'
-      })
+      const payload = await rest('/brief', { method: 'POST', body: { node_id: item.id } })
+      const text = payload.brief || payload.remediation_brief
+      if (!payload.ok || !text) {
+        host.notify({ kind: 'error', message: `Infra Atlas: no brief for ${item.id}` })
+        return
+      }
+      const opened = typeof host.newChat === 'function'
+      if (opened) host.newChat()
+      // The new draft's composer mounts a frame after the route changes, so a
+      // single immediate submit lands nowhere. Address the fresh draft ('new')
+      // rather than the active composer: that fails closed instead of dropping
+      // the brief into the conversation the user last clicked into.
+      let delivered = false
+      const address = opened ? 'new' : focusId
+      for (let attempt = 0; opened && !delivered && attempt < 25; attempt += 1) {
+        if (attempt) await new Promise(resolve => setTimeout(resolve, 80))
+        try {
+          delivered = host.composer.submit(address, text) === true
+        } catch (err) {
+          delivered = false
+        }
+      }
+      if (!delivered) {
+        // Never lose the brief: park it in the composer the operator is looking at.
+        try {
+          delivered = await host.composer.setDraft(address, text)
+        } catch (err) {
+          delivered = false
+        }
+      }
+      host.notify(
+        delivered
+          ? {
+              kind: 'info',
+              message: opened
+                ? `New chat opened with the ${item.label || item.id} brief`
+                : `${item.label || item.id} brief sent to the active chat`
+            }
+          : {
+              kind: 'warning',
+              message: 'Could not start a chat from here — open a chat and use the brief from the Runbook tab'
+            }
+      )
     })
 
   const needsAdoption = drift === 'changed' || drift === 'unregistered'
@@ -2513,6 +2633,7 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                   jsx('span', {
                     className: 'ia-badge',
                     style: { borderColor: DRIFT_COLOR[drift], color: DRIFT_COLOR[drift] },
+                    title: DRIFT_MEANING[drift] || '',
                     children: DRIFT_LABEL[drift] || drift
                   }, 'drift'),
                   health !== 'unknown'
@@ -2581,7 +2702,7 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                       ? 'Agent tool calls may touch this node for the rest of this chat.'
                       : 'The guardrail blocks tools that touch a node until its registry entry has been read. Unlock to lift that for this node until the chat ends.',
                     onClick: doUnlock,
-                    children: isUnlocked ? '✓ Agent actions allowed' : '🔓 Allow agent actions'
+                    children: isUnlocked ? '✓ Agent actions allowed' : '◇ Allow agent actions'
                   })
                 : null,
               jsx('button', {
@@ -2589,7 +2710,7 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                 className: 'ia-btn ia-btn-ghost ia-btn-flex',
                 disabled: Boolean(busy),
                 onClick: dispatchBrief,
-                title: 'Send context & runbook brief to active chat',
+                title: 'Open a new chat with this node’s brief (state, runbook, next steps)',
                 children: '✦ Ask Hermes'
               })
             ]
@@ -2616,6 +2737,9 @@ function InspectorDrawer({ node, busy, setBusy, onClose, onSelectNode, onRefetch
                 item,
                 diff,
                 blast,
+                credentials: Array.isArray(data.credentials)
+                  ? data.credentials
+                  : (data.credentials && Array.isArray(data.credentials.refs) ? data.credentials.refs : []),
                 busy,
                 doReconcile,
                 onSelectNode,
@@ -2656,10 +2780,11 @@ function drawerTab(key, label, tab, setTab) {
   })
 }
 
-function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode, isRetired }) {
+function OverviewSection({ item, diff, blast, credentials, busy, doReconcile, onSelectNode, isRetired }) {
   const reasons = item.drift_reasons || []
   const upstream = (blast && blast.upstream) || []
   const downstream = (blast && blast.downstream) || []
+  const creds = credentials || []
   // Only render properties that carry a real value: eight rows of em-dashes read
   // as a broken panel, not as "this node has no address of its own".
   const properties = [
@@ -2756,6 +2881,33 @@ function OverviewSection({ item, diff, blast, busy, doReconcile, onSelectNode, i
             : jsx('div', { className: 'ia-muted', children: 'No live state recorded for this node.' })
         ]
       }),
+
+      // 3.5 Vault Credentials (masked metadata only — never values)
+      creds.length
+        ? jsxs('div', {
+            className: 'ia-section',
+            children: [
+              jsx('div', { className: 'ia-section-title', children: 'Vault Credentials' }),
+              jsx('div', {
+                className: 'ia-chip-list',
+                children: creds.map(cred =>
+                  jsxs('div', {
+                    className: 'ia-cred-chip',
+                    title: cred.stored ? `Stored in encrypted vault${cred.kind ? ' (' + cred.kind + ')' : ''}` : 'Declared in frontmatter, not yet stored in vault',
+                    children: [
+                      jsx('span', {
+                        className: 'ia-dot',
+                        style: { background: cred.stored ? 'var(--ui-success, #10b981)' : 'var(--ui-warning, #f59e0b)' }
+                      }),
+                      jsx('span', { className: 'ia-cred-name', children: cred.name }),
+                      cred.kind ? jsx('span', { className: 'ia-muted', children: cred.kind }) : null
+                    ]
+                  }, `cred-${cred.name}`)
+                )
+              })
+            ]
+          })
+        : null,
 
       // 4. Interactive Blast Radius
       upstream.length || downstream.length
@@ -3191,6 +3343,11 @@ const CSS = `
   --ia-detail: color-mix(in srgb, var(--foreground, #e2e8f0) 16%, transparent);
   --ia-groove: rgba(0, 0, 0, 0.34);
   --ia-shadow: rgba(0, 0, 0, 0.34);
+  --ia-well: color-mix(in srgb, var(--foreground, #e2e8f0) 6%, var(--card, #0f1523) 82%);
+  --ia-well-soft: color-mix(in srgb, var(--foreground, #e2e8f0) 4%, var(--card, #0f1523) 76%);
+  --ia-well-hover: color-mix(in srgb, var(--foreground, #e2e8f0) 13%, var(--card, #0f1523) 84%);
+  --ia-rim-border: color-mix(in srgb, var(--foreground, #cbd5e1) 15%, transparent);
+  --ia-warn-ink: #f59e0b;
   position: relative;
   width: 100%;
   height: 100%;
@@ -3211,14 +3368,42 @@ const CSS = `
   --ia-shade-side: color-mix(in srgb, var(--foreground, #1b2432) 70%, var(--card, #ffffff));
   --ia-shadow: rgba(20, 32, 54, 0.18);
   --ia-groove: rgba(20, 32, 54, 0.28);
+  --ia-well: color-mix(in srgb, var(--foreground, #1b2432) 5%, var(--card, #ffffff) 92%);
+  --ia-well-soft: color-mix(in srgb, var(--foreground, #1b2432) 3.5%, var(--card, #ffffff) 94%);
+  --ia-well-hover: color-mix(in srgb, var(--foreground, #1b2432) 10%, var(--card, #ffffff) 90%);
+  --ia-rim-border: color-mix(in srgb, var(--foreground, #1b2432) 14%, transparent);
+  --ia-warn-ink: #b45309;
+}
+.ia-root.ia-light .ia-seg-active,
+.ia-root.ia-light .ia-dtab-active,
+.ia-root.ia-light .ia-choice-on {
+  color: #0369a1;
+  background: rgba(2, 132, 199, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(2, 132, 199, 0.35);
+}
+.ia-root.ia-light .ia-live-dot {
+  background: #0284c7;
 }
 
 .ia-glass {
   background: color-mix(in srgb, var(--card, var(--ui-bg-secondary, #0f1523)) 86%, transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--border, rgba(148, 163, 184, 0.14));
+  border: 1px solid var(--border, var(--ia-rim-border));
   box-shadow: 0 10px 30px -6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.ia-root.ia-light .ia-glass {
+  background: color-mix(in srgb, var(--card, #ffffff) 90%, transparent);
+  box-shadow: 0 10px 28px -8px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+.ia-popover, .ia-legend-card, .ia-activity-card, .ia-drawer {
+  background: color-mix(in srgb, var(--card, var(--ui-bg-secondary, #0f1523)) 96%, var(--foreground, #e2e8f0) 4%);
+}
+.ia-root.ia-light .ia-popover,
+.ia-root.ia-light .ia-legend-card,
+.ia-root.ia-light .ia-activity-card,
+.ia-root.ia-light .ia-drawer {
+  background: color-mix(in srgb, var(--card, #ffffff) 98.5%, var(--foreground, #0f172a) 1.5%);
 }
 
 .ia-canvas {
@@ -3299,8 +3484,8 @@ const CSS = `
   gap: 2px;
   padding: 3px;
   border-radius: 9px;
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: var(--ia-well);
+  border: 1px solid var(--ia-rim-border);
   flex: 0 0 auto;
 }
 .ia-seg-btn {
@@ -3356,8 +3541,8 @@ const CSS = `
   pointer-events: none;
 }
 .ia-search {
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: var(--ia-well);
+  border: 1px solid var(--ia-rim-border);
   border-radius: 8px;
   color: var(--foreground, var(--ui-text-primary, #f1f5f9));
   padding: 5px 20px 5px 24px;
@@ -3394,15 +3579,15 @@ const CSS = `
   font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(30, 41, 59, 0.65);
+  border: 1px solid var(--ia-rim-border);
+  background: var(--ia-well);
   color: var(--foreground, var(--ui-text-primary, #e2e8f0));
   white-space: nowrap;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 .ia-btn:hover:not(:disabled) {
-  background: rgba(51, 65, 85, 0.75);
-  border-color: rgba(148, 163, 184, 0.3);
+  background: var(--ia-well-hover);
+  border-color: color-mix(in srgb, var(--foreground, #cbd5e1) 26%, transparent);
 }
 .ia-btn:disabled { opacity: 0.5; cursor: default; }
 .ia-btn-primary {
@@ -3416,7 +3601,7 @@ const CSS = `
   border-color: rgba(125, 211, 252, 0.55);
 }
 .ia-btn-ghost {
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--ia-well-soft);
 }
 .ia-btn-active {
   border-color: rgba(56, 189, 248, 0.55);
@@ -3424,7 +3609,7 @@ const CSS = `
 }
 .ia-btn-unlocked {
   border-color: rgba(16, 185, 129, 0.4);
-  color: #6ee7b7;
+  color: color-mix(in srgb, #10b981 65%, var(--foreground, #e2e8f0));
 }
 .ia-btn-full { flex: 1 1 100%; }
 .ia-btn-flex { flex: 1 1 0; }
@@ -3458,8 +3643,16 @@ const CSS = `
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  background: rgba(15, 23, 42, 0.5);
+  white-space: nowrap;
+  flex: 0 0 auto;
+  border: 1px solid var(--ia-rim-border);
+  background: var(--ia-well-soft);
+}
+.ia-badge-ok {
+  color: color-mix(in srgb, #10b981 62%, var(--foreground, #e2e8f0));
+  border-color: rgba(16, 185, 129, 0.42);
+  background: rgba(16, 185, 129, 0.12);
+  text-transform: none;
 }
 .ia-badge-neutral {
   color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
@@ -3503,8 +3696,8 @@ const CSS = `
   flex: 1 1 0;
   padding: 5px 6px;
   border-radius: 6px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--ia-rim-border);
+  background: var(--ia-well);
   color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
   font-size: 11px;
   font-weight: 500;
@@ -3651,7 +3844,7 @@ const CSS = `
   gap: 8px;
   transition: right 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.ia-map-dock-shifted { right: 358px; }
+.ia-map-dock-shifted { right: 364px; }
 .ia-map-bar {
   display: inline-flex;
   align-items: center;
@@ -3685,6 +3878,10 @@ const CSS = `
 .ia-legend-sub { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); }
 .ia-legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
 .ia-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); white-space: nowrap; }
+.ia-legend-rows { display: flex; flex-direction: column; gap: 5px; }
+.ia-legend-row-wrap { align-items: flex-start; white-space: normal; }
+.ia-legend-row-wrap .ia-badge { flex: 0 0 auto; }
+.ia-legend-meaning { font-size: 10px; line-height: 1.4; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); }
 .ia-legend-note { font-size: 10px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); line-height: 1.35; padding-top: 2px; border-top: 1px solid rgba(148, 163, 184, 0.12); }
 
 /* ── slide-over node inspector drawer ────────────────────────────────────── */
@@ -3718,8 +3915,8 @@ const CSS = `
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.65);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: var(--ia-well);
+  border: 1px solid var(--ia-rim-border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3735,8 +3932,8 @@ const CSS = `
   display: flex;
   gap: 4px;
   padding: 6px 14px;
-  background: rgba(15, 23, 42, 0.35);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: var(--ia-well-soft);
+  border-bottom: 1px solid var(--ia-rim-border);
 }
 .ia-dtab {
   flex: 1 1 0;
@@ -3805,12 +4002,27 @@ const CSS = `
 .ia-prop {
   padding: 7px 9px;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.45);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: var(--ia-well-soft);
+  border: 1px solid var(--ia-rim-border);
   min-width: 0;
+}
+.ia-prop:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 .ia-prop-label { font-size: 9.5px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); text-transform: uppercase; letter-spacing: 0.04em; }
 .ia-prop-val { font-size: 11.5px; font-weight: 500; color: var(--foreground, var(--ui-text-primary, #e2e8f0)); margin-top: 2px; overflow-wrap: anywhere; }
+
+.ia-cred-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: var(--ia-well-soft);
+  border: 1px solid var(--ia-rim-border);
+  font-size: 11px;
+}
+.ia-cred-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--foreground, var(--ui-text-primary, #e2e8f0)); }
 
 .ia-blast-group { display: flex; flex-direction: column; gap: 5px; }
 .ia-blast-label { font-size: 10.5px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
@@ -3821,8 +4033,8 @@ const CSS = `
   gap: 6px;
   padding: 4px 9px;
   border-radius: 7px;
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: var(--ia-well);
+  border: 1px solid var(--ia-rim-border);
   color: var(--foreground, var(--ui-text-primary, #e2e8f0));
   font-size: 11px;
   cursor: pointer;
@@ -3833,8 +4045,8 @@ const CSS = `
 .ia-metric {
   padding: 8px 10px;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.45);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: var(--ia-well-soft);
+  border: 1px solid var(--ia-rim-border);
 }
 .ia-metric-val { font-size: 15px; font-weight: 700; color: var(--foreground, var(--ui-text-primary, #f8fafc)); font-variant-numeric: tabular-nums; }
 .ia-metric-lbl { font-size: 9.5px; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -3846,8 +4058,8 @@ const CSS = `
   height: 48px;
   padding: 8px;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.45);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: var(--ia-well-soft);
+  border: 1px solid var(--ia-rim-border);
 }
 .ia-spark-bar { flex: 1 1 0; background: #38bdf8; border-radius: 2px; opacity: 0.85; min-height: 4px; }
 .ia-spark-down { background: #ef4444; opacity: 0.95; }
@@ -3856,8 +4068,8 @@ const CSS = `
 .ia-inc-card {
   padding: 8px 10px;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.45);
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: var(--ia-well-soft);
+  border: 1px solid var(--ia-rim-border);
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -3867,17 +4079,17 @@ const CSS = `
 .ia-inc-card-res { font-size: 11px; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
 
 .ia-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.ia-table th { text-align: left; font-weight: 600; font-size: 9.5px; text-transform: uppercase; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); padding: 4px 6px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
-.ia-table td { padding: 5px 6px; border-top: 1px solid rgba(148, 163, 184, 0.08); vertical-align: top; overflow-wrap: anywhere; }
+.ia-table th { text-align: left; font-weight: 600; font-size: 9.5px; text-transform: uppercase; color: var(--muted-foreground, var(--ui-text-quaternary, #64748b)); padding: 4px 6px; border-bottom: 1px solid var(--ia-rim-border); }
+.ia-table td { padding: 5px 6px; border-top: 1px solid var(--ia-rim-border); vertical-align: top; overflow-wrap: anywhere; }
 .ia-td-key { font-weight: 500; color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8)); }
-.ia-td-live { color: #7dd3fc; }
+.ia-td-live { color: color-mix(in srgb, #0ea5e9 68%, var(--foreground, #7dd3fc)); }
 
 .ia-runbook {
   margin: 0;
   padding: 10px;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: var(--ia-well);
+  border: 1px solid var(--ia-rim-border);
   font-size: 11px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -3910,8 +4122,8 @@ const CSS = `
   padding: 1px 9px;
   border-radius: 999px;
   color: var(--muted-foreground, var(--ui-text-secondary, #94a3b8));
-  background: rgba(15, 23, 42, 0.65);
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: var(--ia-well, rgba(15, 23, 42, 0.65));
+  border: 1px solid var(--ia-rim-border, rgba(148, 163, 184, 0.22));
   cursor: pointer;
 }
 .ia-chip:hover { color: var(--foreground, var(--ui-text-primary, #f1f5f9)); }
@@ -3992,7 +4204,7 @@ const CSS = `
 .ia-node-compact:hover .ia-node-title { opacity: 1; }
 .ia-node-sub2 { font-size: 8.5px; fill: var(--ia-ink-muted, #cbd5e1); paint-order: stroke; stroke: var(--ia-halo, rgba(8, 10, 16, 0.92)); stroke-width: 3px; stroke-linejoin: round; }
 .ia-chipf { animation: ia-chipf 3.2s ease-in-out infinite; }
-.ia-chip-box { fill: rgba(10, 12, 18, 0.82); stroke-width: 1; }
+.ia-chip-box { fill: color-mix(in srgb, var(--card, #0a0c12) 88%, transparent); stroke-width: 1; }
 .ia-chip-text { font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .ia-alert-base { fill: color-mix(in srgb, var(--ui-danger, #ef4444) 9%, transparent); stroke: var(--ui-danger, #ef4444); stroke-width: 1.3; stroke-dasharray: 4 4; stroke-opacity: 0.85; }
 
@@ -4058,6 +4270,24 @@ path.ia-glass { stroke: var(--ia-detail, rgba(255, 255, 255, 0.16)); stroke-widt
 @keyframes ia-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3.5px); } 75% { transform: translateX(3.5px); } }
 @keyframes ia-flash-allowed { 0% { opacity: 0.45; } 100% { opacity: 1; } }
 @keyframes ia-flash-read { 0% { opacity: 0.45; } 100% { opacity: 1; } }
+
+@media (max-width: 920px) {
+  .ia-topbar {
+    height: auto;
+    min-height: 42px;
+    padding: 6px 10px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ia-brand-meta { display: none; }
+  .ia-actions { margin-left: auto; }
+  .ia-search { width: 98px; }
+  .ia-search:focus { width: 126px; }
+  .ia-popover { right: -78px; }
+  .ia-incident-banner { top: 98px; max-width: calc(100% - 324px); }
+  .ia-drawer { top: 98px; width: 304px; }
+  .ia-map-dock-shifted { right: 336px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .ia-plat, .ia-edge-line, .ia-packet, .ia-burst, .ia-led, .ia-led-b, .ia-led-f, .ia-scan, .ia-meniscus,

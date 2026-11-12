@@ -90,6 +90,14 @@ def plugin_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(home))
     _reset_hermes_home_cache()
     yield home
+    try:
+        H.submodule("hooks").drain_activity(timeout=1.0)
+    except Exception:
+        pass
+    try:
+        H.submodule("matcher").refresh()
+    except Exception:
+        pass
     store_module = H.submodule("store")
     store_module.reset_store()
 

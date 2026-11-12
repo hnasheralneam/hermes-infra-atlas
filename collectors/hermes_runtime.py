@@ -67,6 +67,16 @@ def _profile_name() -> str:
     return os.environ.get("HERMES_PROFILE") or "default"
 
 
+def _is_ip(host: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(str(host or "").strip().strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
 def _endpoint_node(name: str, base_url: str) -> Optional[dict[str, Any]]:
     if not base_url:
         return None
@@ -84,7 +94,7 @@ def _endpoint_node(name: str, base_url: str) -> Optional[dict[str, Any]]:
         "kind": "model_endpoint",
         "stratum": 4,
         "label": name,
-        "host_ip": host if host.replace(".", "").isdigit() else None,
+        "host_ip": host if _is_ip(host) else None,
         "ports": [port],
         "probe": probe,
         "managed_by": "hermes-config",

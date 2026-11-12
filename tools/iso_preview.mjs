@@ -10,12 +10,14 @@
 
 import http from 'node:http'
 import { readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { FIXTURE } from './render_smoke_sdk.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const port = Number(process.argv[2]) || 8377
+const liveGraphPath = process.env.ATLAS_LIVE_GRAPH || join(process.env.TMPDIR || tmpdir(), 'live_graph.json')
 
 const REACT_VERSION = '19.2.7'
 
@@ -25,9 +27,15 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <title>Infra Atlas — isometric preview</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #0a0e17; color: #d9e4f5;
+  html, body { margin: 0; height: 100%; background: var(--card, #0a0e17); color: var(--foreground, #d9e4f5);
+    --card: #0a0e17; --foreground: #e2e8f0; --muted-foreground: #94a3b8;
     font-family: ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+  html.light, html.light body {
+    --card: #f8fafc; --foreground: #0f172a; --muted-foreground: #475569;
+  }
   #root { position: absolute; inset: 0 0 52px 0; }
+  html.hidepanel #root { inset: 0; }
+  html.hidepanel #panel { display: none; }
   #panel { position: fixed; left: 0; right: 0; bottom: 0; height: 52px; display: flex;
     align-items: center; gap: 8px; padding: 0 14px; background: #0c1019;
     border-top: 1px solid rgba(96,126,190,.4); font-size: 12px; z-index: 10; }
@@ -67,6 +75,9 @@ const HTML = `<!doctype html>
 </div>
 <script type="module">
   window.__atlasErrors = []
+  const qp = new URLSearchParams(window.location.search)
+  if (qp.get('theme') === 'light') document.documentElement.classList.add('light')
+  if (qp.get('hidepanel') === '1') document.documentElement.classList.add('hidepanel')
   window.addEventListener('error', e => window.__atlasErrors.push(String(e.message)))
   window.addEventListener('unhandledrejection', e => window.__atlasErrors.push('reject: ' + String(e.reason)))
 
@@ -221,24 +232,41 @@ function blastFor(graph, nodeId) {
     const n = nodes.find(x => x.id === id)
     return { id, label: (n && n.label) || id, kind: (n && n.kind) || 'service' }
   }
-  const walk = (first, second, reverseSecond) => {
+  const walkUpstream = () => {
     const found = new Set()
     let frontier = new Set([nodeId])
     for (let depth = 0; depth < 3 && frontier.size; depth++) {
       const step = new Set()
       for (const e of edges) {
-        if (frontier.has(e.target_id) && first.includes(e.relation)) step.add(e.source_id)
-        if (frontier.has(e.source_id) && second.includes(e.relation)) step.add(reverseSecond ? e.source_id : e.target_id)
+        if (frontier.has(e.target_id) && ['hosts', 'routes_via'].includes(e.relation)) step.add(e.source_id)
+        if (frontier.has(e.source_id) && ['depends_on', 'uses_model'].includes(e.relation)) step.add(e.target_id)
       }
       step.delete(nodeId)
+      for (const id of found) step.delete(id)
+      step.forEach(id => found.add(id))
+      frontier = step
+    }
+    return Array.from(found).sort().map(label)
+  }
+  const walkDownstream = () => {
+    const found = new Set()
+    let frontier = new Set([nodeId])
+    for (let depth = 0; depth < 3 && frontier.size; depth++) {
+      const step = new Set()
+      for (const e of edges) {
+        if (frontier.has(e.source_id) && ['hosts', 'proxies_to'].includes(e.relation)) step.add(e.target_id)
+        if (frontier.has(e.target_id) && ['depends_on', 'uses_model', 'routes_via', 'monitors'].includes(e.relation)) step.add(e.source_id)
+      }
+      step.delete(nodeId)
+      for (const id of found) step.delete(id)
       step.forEach(id => found.add(id))
       frontier = step
     }
     return Array.from(found).sort().map(label)
   }
   return {
-    upstream: walk(['hosts', 'routes_via'], ['depends_on', 'uses_model'], false),
-    downstream: walk(['hosts', 'proxies_to', 'monitors'], ['depends_on', 'uses_model', 'routes_via'], true)
+    upstream: walkUpstream(),
+    downstream: walkDownstream()
   }
 }
 
@@ -263,12 +291,15 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/fixture.json') {
       const fleet = url.searchParams.get('fleet')
-      let graph = FIXTURE.graph
+      let graph = {
+        ...FIXTURE.graph,
+        last_sweep: { ...FIXTURE.graph.last_sweep, finished_at: Math.floor(Date.now() / 1000) - 95 }
+      }
       if (fleet === 'single') graph = singleFleet()
       else if (fleet === 'flat') graph = flatFleet()
       else if (fleet === 'live') {
         try {
-          graph = JSON.parse(await readFile('/home/sysadmin/.hermes/cache/scratch/live_graph.json', 'utf8'))
+          graph = JSON.parse(await readFile(liveGraphPath, 'utf8'))
         } catch {
           graph = FIXTURE.graph
         }
@@ -281,12 +312,21 @@ const server = http.createServer(async (req, res) => {
       const nodeId = url.searchParams.get('id')
       const fleet = url.searchParams.get('fleet')
       let graph = FIXTURE.graph
+      let extras = {}
       if (fleet === 'live') {
         try {
-          graph = JSON.parse(await readFile('/home/sysadmin/.hermes/cache/scratch/live_graph.json', 'utf8'))
+          graph = JSON.parse(await readFile(liveGraphPath, 'utf8'))
+        } catch {}
+        try {
+          extras = JSON.parse(await readFile(liveGraphPath.replace(/live_graph\.json$/, 'live_nodes_extra.json'), 'utf8'))
         } catch {}
       }
-      const found = (graph.nodes || []).find(n => n.id === nodeId) || (graph.nodes || [])[0]
+      const rawFound = (graph.nodes || []).find(n => n.id === nodeId) || (graph.nodes || [])[0]
+      const found =
+        fleet !== 'live' && rawFound && FIXTURE.node && FIXTURE.node.node && rawFound.id === FIXTURE.node.node.id
+          ? { ...rawFound, ...FIXTURE.node.node }
+          : rawFound
+      const extra = (found && extras[found.id]) || null
       const doc = found && found.doc_state
       const live = found && found.live_state
       const diff =
@@ -298,10 +338,11 @@ const server = http.createServer(async (req, res) => {
       const payload = {
         ...FIXTURE.node,
         node: found,
+        credentials: extra ? extra.credentials : (fleet === 'live' ? { declared: [], refs: [], missing: [] } : FIXTURE.node.credentials),
         diff,
         blast_radius: blastFor(graph, nodeId),
-        probe_history: found && found.health_status === 'up' ? FIXTURE.node.probe_history : [],
-        incidents: (graph.incidents || []).filter(inc => inc.node_id === nodeId),
+        probe_history: extra ? extra.probe_history : (found && found.health_status === 'up' ? FIXTURE.node.probe_history : []),
+        incidents: extra ? extra.incidents : (graph.incidents || []).filter(inc => inc.node_id === nodeId),
         registry_markdown: found && found.registry_path ? `# ${found.label || found.id}\n\nRegistry entry: ${found.registry_path}.` : undefined,
       }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })

@@ -66,6 +66,17 @@ class CredentialError(RuntimeError):
 
 # --------------------------------------------------------------------------- paths
 
+def _default_data_file(filename: str) -> Path:
+    """Profile-safe default path under ``$HERMES_HOME/plugin-data/infra-atlas``."""
+    try:
+        from plugins.plugin_storage import plugin_data_dir  # noqa: PLC0415
+
+        return Path(plugin_data_dir("infra-atlas")) / filename
+    except Exception:  # pragma: no cover - standalone interpreter
+        home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+        return home / "plugin-data" / "infra-atlas" / filename
+
+
 def vault_path() -> Path:
     """The vault file, profile-scoped by default (``ctx.state.data_dir``)."""
     raw = plugin_config.setting("credentials_path")
@@ -135,6 +146,17 @@ def _fernet(create: bool = False):
 
 
 def _encrypt(value: str) -> str:
+    vpath, kpath = vault_path(), key_path()
+    if vpath.exists() and not kpath.exists():
+        try:
+            existing = json.loads(vpath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        if isinstance(existing, dict) and existing.get("encrypted") and existing.get("entries"):
+            raise CredentialError(
+                f"encrypted vault at {vpath} already holds entries, but its key at {kpath} is missing; "
+                "refusing to mint a new key that would orphan existing secrets"
+            )
     fernet = _fernet(create=True)
     if fernet is None:
         raise CredentialError(
@@ -487,7 +509,6 @@ def scan_report(root: Optional[Path] = None) -> dict[str, Any]:
 
 __all__ = [
     "CredentialError",
-    "declare_missing",
     "declared_refs",
     "delete_value",
     "get_value",

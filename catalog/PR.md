@@ -41,27 +41,35 @@ and keeps the two honest with each other.
   reported as a symptom, not restarted. A generated watchdog script is silent
   (`{"wakeAgent": false}`, zero tokens) while the fleet is healthy.
 
+- **Private credential vault (`infra_credentials`).** Registry entries declare secrets by name
+  (`credentials: [name, …]`) while values live in a `0600` Fernet-encrypted vault under
+  `$HERMES_HOME/plugin-data/infra-atlas/`. Reads obey the same read-before-touch gate and write
+  to the activity ledger; `action="scan"` finds leftover plaintext literals in the Markdown KB
+  with masked previews so operators can migrate them safely.
+
 ## Surfaces used
 
 - **Tools:** `infra_query`, `infra_sweep`, `infra_diff`, `infra_upsert`, `infra_bootstrap`,
-  `infra_incidents` (this last one also schedules the watchdog through the `cronjob` tool).
+  `infra_incidents` (also schedules/updates the watchdog through `cronjob_manage`), and
+  `infra_credentials`.
 - **Hooks:** `pre_tool_call` (the guardrail), `post_tool_call` (activity ledger for the
   overlay), `on_session_start` (kick off a background sweep).
-- **Desktop:** full page at `/infra-atlas` (SVG topology, inspector with Diff / Uptime /
-  Runbook tabs, incident strip), a statusbar health chip, the `::infra{}` and `::drift{}`
-  transcript directives, `⌘K` commands, and events under `plugin.infra-atlas.*`.
+- **Desktop:** full page at `/infra-atlas` (isometric SVG topology, slide-over inspector with
+  Overview / Uptime / Runbook tabs, incident banner, activity & legend docks), a statusbar
+  health chip, `::infra{}` and `::drift{}` transcript directives, `⌘K` commands, and events
+  under `plugin.infra-atlas.*`.
 - **Web dashboard backend:** `dashboard/plugin_api.py` serves
-  `/api/plugins/infra-atlas/{graph,node,sweep,reconcile,heal,incidents,watchdog,settings,activity}`.
+  `/api/plugins/infra-atlas/{health,graph,node,sweep,reconcile,heal,incidents,watchdog,settings,activity,credentials}`.
 - **Bundled skill** (`infra-atlas`) plus an **automation blueprint** (`uptime-watchdog`) and a
   `/atlas` gateway command.
 
 ## Disclosure (rule 13)
 
 - **Shell commands.** Two places. (1) The optional local remediation playbook executes a
-  fixed set of allow-listed unit/container verbs (`systemctl --user start|restart …`,
-  `docker compose up -d …`, `qm start …`) against services it already discovered on the local
-  host. (2) The agent-side remediation brief asks the model to act — normal Hermes approval
-  rules apply. There is no arbitrary command string from user input.
+  fixed set of allow-listed unit/container verbs (`systemctl`, `service`, `docker compose`,
+  `podman`, `pct`, `qm`) against services on the local host without a shell (`shlex.split`,
+  shell metacharacters rejected). (2) The agent-side remediation brief asks the model to act —
+  normal Hermes approval rules apply. There is no arbitrary command string from user input.
 - **Network calls.** Only to targets the user configures or documents: the Proxmox API and
   Headscale API when those collectors are enabled (credentials via
   `agent.secret_scope.get_secret`), and TCP/HTTP probes to registered hosts, which are off by
@@ -69,15 +77,18 @@ and keeps the two honest with each other.
 - **Reads outside the plugin's own data.** The registry directory the user points it at, and
   read-only host state: `systemctl` listings, `/proc/net/tcp`, `docker ps`, `tailscale status`,
   and Hermes's own configuration for the runtime collector (model endpoints, MCP servers, cron
-  jobs). No credential store is read; secrets go through Hermes.
+  jobs). Collector secrets go through `agent.secret_scope`; operator-stored runbook credentials
+  live in the plugin's own `0600` Fernet vault under `$HERMES_HOME/plugin-data/infra-atlas/`
+  (never read or written unless `infra_credentials` is invoked; dashboard view is masked and
+  read-only).
 - **Long-running process.** The uptime watchdog runs as a scheduled Hermes cron job (opt-in
   via `infra_incidents(action="setup_watchdog")`), one sweep per tick.
 - **Behaviour that can block work.** With the default `guardrail_mode: block`, the plugin can
   refuse a `terminal`/`write_file`/`patch` call. It says exactly what to read first and fails
   open on any internal error.
-- **Data storage.** SQLite under `$HERMES_HOME/plugin-data/infra-atlas/atlas.db`: nodes, edges,
-  probe samples, incidents, session read-unlocks and tool-activity rows. Nothing leaves the
-  machine.
+- **Data storage.** SQLite (`atlas.db`) and the opt-in encrypted credential vault
+  (`credentials.json` + `credentials.key`, `0600`) under
+  `$HERMES_HOME/plugin-data/infra-atlas/`. Nothing leaves the machine.
 
 ## Why it belongs in the catalog
 
@@ -89,14 +100,16 @@ and a dashboard router.
 
 ## Verification in this repo
 
-- `pytest`: 116 passed, 1 skipped (the skip needs `ruamel.yaml`). Coverage of the plugin package
-  is 83% of statements (`coverage run --source=. -m pytest`); CI fails under 75%.
+- `pytest`: 125 passed, 1 skipped (126 passed where `ruamel.yaml` is installed). Coverage of the
+  plugin package is 83% of statements (`coverage run --source=. -m pytest`); CI fails under 75%.
 - Desktop: `tools/render_smoke.mjs` renders all 8 registered surfaces and asserts a down node
-  draws a red beacon and retired entries stay off the map; `tools/viewport_test.mjs` drives the
-  real component in JSDOM — wheel zoom stays anchored under the cursor, drag pans in the
-  direction of the pointer, a 40-node tier packs three rows, guests stay next to their
-  hypervisor, and no two nodes share a tile.
-- `hermes plugins doctor`: 6 tools, 3 hooks, no drift.
-- `hermes plugins validate`: all checks pass, including `no core override` and `desktop surface`.
-- Verified from a fresh `git clone` of `main`: pytest, render smoke, viewport test and
-  `plugins validate` all pass with nothing but a Hermes checkout on `PYTHONPATH`.
+  draws a red beacon, segment counts match drawn nodes, and retired entries stay off the map;
+  `tools/viewport_test.mjs` drives the real component in JSDOM — wheel zoom stays anchored under
+  the cursor, drag pans in the direction of the pointer, a 40-node tier packs three rows, guests
+  stay next to their hypervisor, masked vault credentials render in the inspector, and no two
+  nodes share a tile.
+- `hermes plugins doctor`: 7 tools, 3 hooks, no drift.
+- `hermes plugins validate`: all 16 checks pass, including `security scan — safe`, `no core override`
+  and `desktop surface`.
+- Verified from a fresh `git clone` of `main`: `tools/check.sh` passes end-to-end with nothing
+  but a Hermes checkout on `PYTHONPATH`.
