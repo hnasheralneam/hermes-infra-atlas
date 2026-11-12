@@ -40,10 +40,16 @@ infrastructure graph”). The desktop half is opt-in: flip it on in Capabilities
 
 ```text
 /atlas                     # counts, guardrail mode, open incidents
+/atlas nodes               # every node: kind, drift tag, health, address
+/atlas drift               # what disagrees with the registry, and the reason
+/atlas incidents           # open downtime + 24h fleet uptime
 infra_bootstrap            # add frontmatter to an existing Markdown registry
 infra_sweep                # discover + probe + diff
 infra_query node_id=…      # read one entry (and unlock it for this session)
 ```
+
+The same commands work from a shell, for an operator (or a cron job) that is not
+inside a chat: `hermes atlas nodes`, `hermes atlas drift`, `hermes atlas show svc-litellm`.
 
 No registry yet? `infra_bootstrap mode=scaffold_from_live` writes a starter directory from
 what the collectors can actually see (this host, the Hermes runtime, and Proxmox or Headscale
@@ -101,6 +107,54 @@ the moment they matter.
 | `infra_credentials` | Private credential vault: list, get (gated), set/rotate, remove, and scan the KB for literals. |
 
 Bundled skill: `infra-atlas:infra-atlas` (loaded automatically when the plugin is enabled).
+
+## Text and CLI surface
+
+The desktop page is one door; a chat is the other. `/atlas …` works in any
+session (Desktop, CLI, Discord) and `hermes atlas …` works in a shell — same
+commands, same store, same renderers (`atlas_cli.py`).
+
+| Command | Answers |
+|---|---|
+| `status` | Node counts, guardrail/downtime policy, last sweep, fleet uptime, open incidents. Default. |
+| `nodes [search] [--kind K] [--drift D] [--health H] [--limit N]` | The graph the last sweep fused: id, kind, drift tag, health, address, label. |
+| `drift [--all]` | Only what disagrees with the registry, with the field-level reason. |
+| `incidents [--all] [--limit N]` | Open downtime incidents (and, with `--all`, closed ones) plus fleet uptime. |
+| `uptime [--limit N]` | 24h probe uptime, worst first, with the probe target. |
+| `entries [search]` | The *documented* side: registry files on disk, their kind and status. |
+| `show <node>` | One node: state, address, managed-by, probe, uptime, pitfalls, drift reasons, incidents. An ambiguous name returns the shortlist instead of "no match". |
+| `cat <node>` | The registry entry itself, verbatim — the runbook the guardrail makes the agent read. |
+| `activity [-n N]` | Recent agent activity against the graph (reads, allowed touches, blocked touches). |
+| `creds` | Vault names, kinds and which entries reference them — never a value. |
+| `sweep [--sources …]` | Run a live sweep, then print the new counts. The only command that touches the network. |
+
+`nodes` and `entries` are deliberately two commands: `entries` is what the
+registry *claims*, `nodes` is what the sweep *observed*. The difference between
+them is the whole point of the tool.
+
+A **partial** sweep reclassifies only what it saw: `sweep --sources kb` parses the
+registry and probes nothing, so live-only nodes (agents, cron jobs, model
+endpoints) fall back to `doc_only` until a full `sweep` runs again. Use the
+narrow scope for registry edits, the full one before you trust the counts.
+
+## Drift tags
+
+Every node carries the sweep's verdict about its registry entry — not a health
+reading. The page shows the tag on the node, in the inspector and in the legend;
+`/atlas nodes` prints it as a column.
+
+| Tag | Meaning |
+|---|---|
+| `matched` | The registry entry and reality agree: address, ports, unit, parent all match, and the probe answered. Nothing to do. |
+| `changed` | Alive but different — an address, port, unit or parent the entry does not claim. Reconcile the entry or fix the node. |
+| `unregistered` | Alive with no registry entry at all: undocumented infrastructure, invisible to the runbook and the guardrail. Adopt it. |
+| `stale` | Documented as active, but nothing answers its probe. This is the "should be up and isn't" case that opens incidents. |
+| `observed` | Seen on the tailnet only — no entry, nothing probed. Presence, not health. |
+| `doc_only` | Nothing to probe: a project/story entry, or one retired from service. |
+
+A health column sits beside it (`up` / `degraded` / `down` / `unknown`): a
+`matched` node can still be `down` for a moment before the sweep reclassifies
+it, and a `stale` node is `down` by construction.
 
 ## Settings
 
@@ -180,6 +234,39 @@ Writes are agent-side only — the vault is never writable over HTTP.
   `SYSTEMD_PAGER`, plus `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` for `systemctl --user`.
   The agent's API keys and tokens are never inherited.
 
+## Registry write gate
+
+The knowledge base is deliberately **open** — it is the club's living runbook, not a
+frozen document. What is enforced is the *route*: the files `infra_upsert` owns must be
+written by `infra_upsert`, because a hand-edit skips frontmatter merging, the `INDEX.md`
+refresh, the change-log entry and the `verified_at` bump, and the node table then drifts
+from the files it claims to describe.
+
+| Setting | Effect |
+|---|---|
+| `registry_write_gate: block` (default) | Veto `write_file` / `patch` / shell writes (`sed -i`, `tee`, `cat >`, `mv`, `rm`, inline `open(…,'w')`) targeting `servers/`, `services/`, `projects/` entries, `INDEX.md` or `change-log.md`. The refusal names `infra_upsert` and `infra_credentials`. |
+| `registry_write_gate: warn` | Record the raw write in the activity ledger and allow it. |
+| `registry_write_gate: off` | No gate. |
+
+Scope is exactly what the tool owns. `plans/`, `conventions.md`, `LIVE-STATE.md`, the
+CCDC channel tracker and its log directory, and anything outside the registry stay
+hand-editable — a gate with no sanctioned exit is just an obstacle. Reads (`cat`, `grep`,
+`ls`, `head`, `read_file`) are never affected, and the gate is independent of
+`guardrail_mode`: disabling the read-before-touch guardrail does not disable it.
+
+Writes through `~/hermes-kb/01-Infrastructure/infra-registry` are blocked too. That path
+is a symlink to the registry root, kept so the backup mirror can see the tree — it is a
+read address, never a write address. The gate resolves symlinks before matching, so the
+alias is caught exactly like the real path.
+
+### Rewriting a runbook
+
+Appending can only grow an entry, so `replace_body=true` (with the full new text in
+`markdown_body`) is the sanctioned path for a structural rewrite. The previous body is
+written to `.rewrites/<entry>.bak-<timestamp>` first and named in the change-log entry,
+so a bad rewrite is recoverable without git. `replace_body` without a body is refused
+rather than blanking the runbook.
+
 No telemetry, no network calls to anything not configured above.
 
 ## Layout
@@ -203,16 +290,16 @@ tests/               pytest suite (registry, fusion, gate, uptime, collectors, A
 
 ## Tests
 
-```bash
 After a reload, the page tells you which bundle it is running:
 `document.querySelector('.ia-root').dataset.build` in the desktop devtools. It is bumped on
 every shipped change.
 
+```bash
 tools/check.sh                       # every gate: compile, syntax, 8 surfaces, gestures,
-                                     # layout, manifest validation, pytest, coverage floor
+                                     # layout, manifest + catalog parity, pytest, coverage floor
 PYTHONPATH=<hermes-agent checkout> python -m pytest
 PYTHONPATH=<hermes-agent checkout> python -m coverage run --source=. --omit='tests/*,tools/*,desktop/*' -m pytest
-python -m coverage report      # 82% of statements; tools/check.sh fails under 75%
+python -m coverage report            # tools/check.sh fails under 75%
 hermes plugins doctor .
 hermes plugins validate .
 ```
@@ -250,7 +337,10 @@ pan/zoom — still selectable, keyboard-reachable and crisp at any zoom):
   managed by docker/podman/compose draws as a crate, and one that names a model
   server (llama-server, llama.cpp, vLLM, Ollama, SGLang, TensorRT-LLM, TGI,
   llama.cpp forks…) draws as a GPU rig — while its control plane (dashboard,
-  control, proxy, metrics shim, router) stays a plain service.
+  control, proxy, metrics shim, router) stays a plain service. A probe that
+  speaks the model API (`…/v1/models`, `…/v1/chat/completions`) is enough on its
+  own, which is what puts a llama.cpp host labelled by its owner — "flash-8
+  (Dipa's fedora box)" — on the inference tier instead of in the service rows.
 - Edges are routed on the tile grid (A\* with footprint obstacles + congestion
   cost): parallel connections fan into side-by-side lanes, terrace steps are
   crossed squarely, and each relation has its own color, dash rhythm and a
@@ -281,13 +371,17 @@ The page around it stays deliberately sparse:
   symmetric secondary row (`Unlock Chat`, `Ask Hermes`), and three tabs — `Overview`
   (pitfalls callout, field-by-field diff, properties, clickable blast radius), `Uptime`
   (24h %, latency sparkline, probe target, incident history with inline resolve), `Runbook`.
+  **`Ask Hermes` opens a new chat** and starts it with that node's brief — the state, the
+  registry entry, the pitfalls and a mission matched to the node (inspect when it is healthy,
+  reconcile when it has drifted, recover when it is down). It never pastes into whatever
+  conversation happened to be focused, which from this page usually means no conversation at all.
 - **Direct manipulation**: drag to pan (content follows the cursor), a mouse-wheel notch or
   trackpad pinch zooms around the pointer, two-finger trackpad scrolling pans, double-click
   zooms in (shift double-click out), and the `− 100% +` cluster resets or steps. The camera is
   owned imperatively — a drag survives the pointer crossing the toolbar, the drawer or the
-  window edge, and labels freeze while it moves so the scene keeps its frame rate. Gestures are handled imperatively — the viewBox is written in a
-  rAF and React state only syncs when the gesture ends — so a hundred-node fleet pans at
-  frame rate instead of re-rendering the whole tree per pointermove.
+  window edge, the `viewBox` is written inside a `requestAnimationFrame` while React state only
+  syncs once the gesture settles, and labels freeze during motion so a hundred-node fleet pans
+  at frame rate.
 - **Both themes, by construction.** The diorama derives its whole palette from the two values
   the plugin host provides — `--card` (surface) and `--foreground` (ink): the ground is the
   card colour, node bodies are a card/ink mix tinted 14% with the kind's accent, terraces are

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 FOLDERS = {"servers": "server", "services": "service", "projects": "project"}
-KIND_PREFIX = {"server": "srv", "service": "svc", "project": "proj", "vm": "vm", "lxc": "lxc", "container": "ct", "agent": "agent"}
+KIND_PREFIX = {"server": "srv", "service": "svc", "project": "proj", "vm": "vm", "lxc": "lxc", "container": "ct", "agent": "agent", "inference": "svc"}
 KIND_STRATUM = {
     "server": 1,
     "network": 1,
@@ -53,12 +53,29 @@ _INFERENCE_MARKERS = re.compile(
 _INFERENCE_CONTROL_WORDS = re.compile(r"(?:dashboard|control|proxy|metrics|shim|router|monitor|playbook)", re.I)
 
 
-def _runtime_kind(kind: str, managed: Optional[str], label: str, unit: Optional[str], node_id: str) -> str:
+# A probe that speaks the OpenAI-compatible model API means the entry IS a model
+# server, whatever its label says: "flash-8 (Dipa's fedora box)" is llama.cpp on
+# Dipa's box, and drawing it as a generic service buries half the inference fleet
+# in the service terrace.
+_INFERENCE_PROBE_RE = re.compile(r"/v1/(?:models|completions|chat/completions|embeddings)\b", re.I)
+
+
+def _runtime_kind(
+    kind: str,
+    managed: Optional[str],
+    label: str,
+    unit: Optional[str],
+    node_id: str,
+    probe: Optional[str] = None,
+) -> str:
     """Return the kind used for drawing: container / inference / unchanged."""
     if kind not in {"service", "container", "model_endpoint"}:
         return kind
     haystack = " ".join(str(part) for part in (label, unit, node_id) if part)
-    if _INFERENCE_MARKERS.search(haystack) and not _INFERENCE_CONTROL_WORDS.search(str(label or "")):
+    control_plane = bool(_INFERENCE_CONTROL_WORDS.search(str(label or "")))
+    if _INFERENCE_MARKERS.search(haystack) and not control_plane:
+        return "inference"
+    if probe and _INFERENCE_PROBE_RE.search(str(probe)) and not control_plane:
         return "inference"
     if _CONTAINER_MANAGERS.search(str(managed or "")):
         return "container"
@@ -228,9 +245,15 @@ def slug_for(kind: str, stem: str) -> str:
 
 
 def file_for(root: Path, kind: str, node_id: str) -> Path:
-    folder = {"server": "servers", "service": "services", "project": "projects"}.get(kind)
-    if not folder:
-        folder = "services"
+    folder = {
+        "server": "servers",
+        "vm": "servers",
+        "lxc": "servers",
+        "service": "services",
+        "container": "services",
+        "inference": "services",
+        "project": "projects",
+    }.get(kind, "services")
     stem = node_id
     for prefix in KIND_PREFIX.values():
         if stem.startswith(f"{prefix}-"):
@@ -363,8 +386,12 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
         )
         status = "removed" if retired else "active"
 
-    ip_match = meta.get("host_ip") or _first_ip(body)
-    tailnet_match = meta.get("tailnet_ip") or (_TAILNET_IP_RE.search(body).group(0) if _TAILNET_IP_RE.search(body) else None)
+    base_kind = str(meta.get("kind") or kind)
+    is_project = base_kind == "project"
+
+    ip_match = meta.get("host_ip") or (None if is_project else _first_ip(body))
+    tailnet_hit = None if is_project else _TAILNET_IP_RE.search(body)
+    tailnet_match = meta.get("tailnet_ip") or (tailnet_hit.group(0) if tailnet_hit else None)
 
     ports: list[str] = []
     declared = meta.get("ports") or []
@@ -372,7 +399,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
         ports = [str(p) for p in declared]
     elif isinstance(declared, str):
         ports = re.findall(r"\d{2,5}", declared)
-    if not ports:
+    if not ports and not is_project:
         for pattern in _PORT_RES:
             for match in pattern.finditer(body):
                 value = match.group(1)
@@ -382,10 +409,10 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
                 break
     ports = sorted({p for p in ports if p.isdigit() and 1 <= int(p) <= 65535}, key=int)[:8]
 
-    # Server docs mention many other hosts' units and IDs; only a service/container
-    # entry (or an explicit frontmatter field) may claim one for itself.
+    # Server and project docs mention many other hosts' units and IDs; only a
+    # service/container entry (or an explicit frontmatter field) may claim one.
     unit = meta.get("systemd_unit")
-    if not unit and kind != "server":
+    if not unit and not is_project and kind != "server":
         units = _UNIT_RE.findall(body)
         if units:
             unit = max(set(units), key=units.count)
@@ -401,7 +428,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
             vmid = None
 
     managed = str(meta.get("managed_by") or "").strip().lower() or None
-    if not managed and (unit or kind != "server"):
+    if not managed and not is_project and (unit or kind != "server"):
         for pattern, label_managed in _MANAGED_RES:
             if pattern.search(body):
                 managed = label_managed
@@ -457,7 +484,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
     parent_id = str(meta.get("parent_id") or "").strip() or None
     if resolved_kind == "server" and (vmid or (parent_id and str(managed).lower() == "proxmox")):
         resolved_kind = "vm"
-    resolved_kind = _runtime_kind(resolved_kind, managed, label, unit, node_id)
+    resolved_kind = _runtime_kind(resolved_kind, managed, label, unit, node_id, probe)
     node = {
         "id": node_id,
         "kind": resolved_kind,
@@ -500,6 +527,7 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
             "recovery_cmd": recovery_cmd,
             "auto_heal_policy": heal_policy,
             "probe": probe,
+            "probe_inferred": bool(probe) and not probe_explicit,
             "credentials": [str(c) for c in credentials],
             "frontmatter": bool(_raw),
         },
@@ -657,6 +685,23 @@ def update_index(root: Path, node: dict[str, Any]) -> None:
     _atomic_write(path, "".join(lines[:header_index] + block + lines[insert_at:]))
 
 
+def _archive_body(root: Path, path: Path, old_body: str) -> str:
+    """Save the pre-rewrite body beside the entry; return its registry-relative path.
+
+    A ``replace_body`` rewrite is the one operation that can destroy a runbook, so
+    the previous text lands in ``<entry>.bak-<timestamp>`` before the write. The
+    archive is deliberately outside ``servers/``/``services/``/``projects/`` so it
+    is not itself a registry entry (and not subject to the write gate).
+    """
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    archive_dir = root / ".rewrites"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    rel_entry = path.relative_to(root).as_posix().replace("/", "_")
+    archive = archive_dir / f"{rel_entry}.bak-{stamp}"
+    _atomic_write(archive, old_body)
+    return archive.relative_to(root).as_posix()
+
+
 def upsert_entry(
     root: Path,
     node: dict[str, Any],
@@ -664,20 +709,55 @@ def upsert_entry(
     session_id: str = "",
     body_append: str = "",
     create_body: str = "",
+    replace_body: bool = False,
 ) -> dict[str, Any]:
-    """Create/merge one registry entry, refresh INDEX.md and prepend a change-log entry."""
+    """Create/merge one registry entry, refresh INDEX.md and prepend a change-log entry.
+
+    ``body_append`` extends the runbook. ``replace_body`` (explicit opt-in) swaps the
+    body wholesale — the only way to shorten or restructure a runbook, which the
+    default append-only rule refuses. A replace always archives the previous body
+    beside the entry first, so a bad rewrite is recoverable without git.
+    """
     root = Path(root)
-    kind = str(node.get("kind") or "service")
+    raw_kind = str(node.get("kind") or "service")
+    canonical_kind = {
+        "server": "server",
+        "vm": "server",
+        "lxc": "server",
+        "service": "service",
+        "container": "service",
+        "inference": "service",
+        "project": "project",
+    }.get(raw_kind, "service")
     node_id = str(node.get("id") or "").strip()
     if not node_id:
         raise ValueError("node_id is required")
     # Validated + confined before anything reads or writes: the id is caller
     # supplied and becomes a path component.
-    path = entry_path(root, kind, node_id)
+    explicit_rel = str(node.get("registry_path") or "").strip()
+    path: Optional[Path] = None
+    if explicit_rel:
+        cand = (root / explicit_rel).resolve()
+        try:
+            cand.relative_to(Path(root).resolve())
+            path = cand
+        except ValueError:
+            raise ValueError(f"refusing to write outside the registry: {explicit_rel}")
+    if path is None:
+        # The folder is chosen by the canonical kind (server/service/project);
+        # the finer `kind` below is refined from the file once the path is known.
+        path = entry_path(root, canonical_kind, node_id)
     root = Path(root).resolve()
     existed = path.exists()
     old_text = path.read_text(encoding="utf-8", errors="replace") if existed else ""
     _meta, _raw, old_body = split_frontmatter(old_text)
+
+    folder_kind = FOLDERS.get(path.parent.name.lower())
+    kind = (
+        raw_kind
+        if raw_kind in {"server", "service", "project"}
+        else (str(_meta.get("kind") or "") if str(_meta.get("kind") or "") in {"server", "service", "project"} else (folder_kind or canonical_kind))
+    )
 
     meta: dict[str, Any] = {}
     if existed:
@@ -712,13 +792,34 @@ def upsert_entry(
     meta["verified_at"] = _dt.date.today().isoformat()
 
     body = old_body
-    if body_append.strip():
-        body = body.rstrip("\n") + "\n\n" + body_append.strip() + "\n"
-    if not existed:
-        label = meta.get("label") or node_id
-        body = body or f"\n# {label}\n\n{create_body.strip()}\n"
-    if existed and len(body.splitlines()) < len(old_body.splitlines()):
-        raise RuntimeError("refusing to write: the new body is shorter than the existing runbook")
+    archived: Optional[str] = None
+    if replace_body:
+        # A structural rewrite: take the new text verbatim (the caller already
+        # passed it as body_append), but only after the old body is on disk.
+        if existed and old_body.strip():
+            archived = _archive_body(root, path, old_body)
+        body = ""
+        if body_append.strip():
+            body = "\n" + body_append.strip() + "\n"
+        elif not existed:
+            label = meta.get("label") or node_id
+            body = f"\n# {label}\n\n{create_body.strip()}\n"
+        if existed and not body.strip():
+            raise RuntimeError(
+                "replace_body was set but no new body was supplied — pass the full replacement "
+                "text in markdown_body, or omit replace_body to append"
+            )
+    else:
+        if body_append.strip():
+            body = body.rstrip("\n") + "\n\n" + body_append.strip() + "\n"
+        if not existed:
+            label = meta.get("label") or node_id
+            body = body or f"\n# {label}\n\n{create_body.strip()}\n"
+        if existed and len(body.splitlines()) < len(old_body.splitlines()):
+            raise RuntimeError(
+                "refusing to write: the new body is shorter than the existing runbook "
+                "(pass replace_body=true with the full replacement text to rewrite it)"
+            )
 
     text = render_frontmatter(meta) + (body if body.startswith("\n") else "\n" + body.lstrip("\n"))
     _atomic_write(path, text)
@@ -730,11 +831,13 @@ def upsert_entry(
         "registry_path": str(path.relative_to(root)),
     }
     update_index(root, parsed)
-    action = "Created entry" if not existed else "Updated entry"
+    action = "Rewrote entry" if replace_body else ("Created entry" if not existed else "Updated entry")
     bullets = [
         f"**Node:** `{node_id}` (`{parsed.get('registry_path')}`)",
         f"**Change:** {action} — {reason.strip() or 'no reason recorded'}",
     ]
+    if archived:
+        bullets.append(f"**Previous body archived:** `{archived}`")
     details = []
     for key in ("host_ip", "tailnet_ip", "vmid", "ports", "managed_by", "systemd_unit", "status"):
         if meta.get(key) not in (None, "", []):
@@ -747,7 +850,7 @@ def upsert_entry(
         bullets.append("**Source:** infra-atlas")
     prepend_change_log(root, f"{_now_est()} — [infra-atlas] {action}: {node_id}", bullets)
 
-    return {**parsed, "created": not existed}
+    return {**parsed, "created": not existed, "archived_body": archived}
 
 
 def mark_removed(root: Path, node: dict[str, Any], reason: str, session_id: str = "") -> dict[str, Any]:

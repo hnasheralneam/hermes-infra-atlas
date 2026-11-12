@@ -91,6 +91,15 @@ def _has_read(store, session: str, node_id: str) -> bool:
 
 
 _BLOCK_PREFIX = "[Infra Atlas Guardrail — Read Before You Touch]"
+_REGISTRY_WRITE_PREFIX = "[Infra Atlas — Registry Write Gate]"
+
+#: The sanctioned write route, quoted verbatim in every refusal so the agent has
+#: the exact call to make instead of guessing at a workaround.
+_REGISTRY_WRITE_ROUTE = (
+    "Write the registry through `infra_upsert(node_id=…, reason=…, markdown_body=…)` — it merges "
+    "frontmatter, refreshes INDEX.md, prepends the change-log entry and bumps verified_at in one "
+    "atomic write. Credential values go to `infra_credentials(action=\"set\", …)`, never into an entry."
+)
 
 # A blocked call still fires post_tool_call. Remember the decision so the
 # observer does not log a vetoed call as an allowed touch a moment later.
@@ -134,6 +143,84 @@ def _unlock(store, session_id: str, nodes: list[dict[str, Any]], via: str) -> li
     return unlocked
 
 
+def _registry_write_veto(
+    tool_name: str, args: dict[str, Any], session: str
+) -> Optional[dict[str, Any]]:
+    """Veto a raw write to a file ``infra_upsert`` owns; ``None`` allows the call.
+
+    The knowledge base is deliberately open — this gate does not protect it from
+    change, it protects the *route*. A hand-edit skips frontmatter merging, the
+    INDEX refresh, the change-log entry and the ``verified_at`` bump, so the
+    plugin's node table drifts from the files it claims to describe.
+    """
+    try:
+        mode = plugin_config.registry_write_gate()
+        if mode == "off":
+            return None
+        targets = matcher.registry_write_targets(
+            tool_name, args, plugin_config.registry_root()
+        )
+        if not targets:
+            return None
+        listed = ", ".join(f"`{rel}`" for rel in targets[:4])
+        if len(targets) > 4:
+            listed += f" and {len(targets) - 4} more"
+        if mode == "warn":
+            _enqueue_activity(
+                session,
+                tool_name,
+                "registry",
+                "registry_write_warned",
+                blocked=False,
+                summary=f"raw registry write without infra_upsert: {listed}",
+                args_preview=matcher.preview(args),
+            )
+            _broadcast(
+                "activity",
+                {
+                    "session_id": session,
+                    "node_id": "registry",
+                    "label": "Infra registry",
+                    "action_kind": "registry_write_warned",
+                    "tool_name": tool_name,
+                    "summary": f"warned: raw registry write to {listed}",
+                },
+            )
+            return None
+
+        message = (
+            f"{_REGISTRY_WRITE_PREFIX} Blocked `{tool_name}` writing {listed} directly. "
+            f"{_REGISTRY_WRITE_ROUTE} "
+            "The registry is open to edits — this gate only enforces the route, so the plugin's "
+            "node table and the files stay in step. Files the tool does not own "
+            "(plans/, conventions.md, LIVE-STATE.md, tracker files) remain hand-editable."
+        )
+        _enqueue_activity(
+            session,
+            tool_name,
+            "registry",
+            "registry_write_blocked",
+            blocked=True,
+            summary=f"blocked raw registry write: {listed}",
+            args_preview=matcher.preview(args),
+        )
+        _broadcast(
+            "activity",
+            {
+                "session_id": session,
+                "node_id": "registry",
+                "label": "Infra registry",
+                "action_kind": "registry_write_blocked",
+                "tool_name": tool_name,
+                "summary": f"blocked: raw registry write to {listed} (use infra_upsert)",
+            },
+        )
+        return {"action": "block", "message": message}
+    except Exception:  # noqa: BLE001 - never fail a tool call on our own bug
+        logger.warning("infra-atlas: registry write gate error (allowing the call)", exc_info=True)
+        return None
+
+
 def on_pre_tool_call(
     tool_name: str = "",
     args: Optional[dict[str, Any]] = None,
@@ -143,6 +230,17 @@ def on_pre_tool_call(
 ) -> Optional[dict[str, Any]]:
     """Veto a blind operation on documented infrastructure; record what was read."""
     try:
+        args = args or {}
+        session = _session(session_id, task_id)
+
+        # The registry write gate runs first and independently of guardrail_mode:
+        # it is about the knowledge base's single writer, not about reading a
+        # node's runbook, and it must hold even for a node the session already
+        # unlocked (or with the host guardrail disabled).
+        veto = _registry_write_veto(tool_name, args, session)
+        if veto is not None:
+            return veto
+
         mode = plugin_config.guardrail_mode()
         if mode == "off":
             return None

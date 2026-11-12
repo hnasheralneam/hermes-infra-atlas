@@ -116,7 +116,12 @@ INFRA_UPSERT = {
                 "enum": ["inherit", "auto", "playbook_only", "notify_only", "off"],
             },
             "pitfalls": {"type": "string", "description": "Known traps, surfaced by the guardrail and the responder."},
-            "markdown_body": {"type": "string", "description": "Runbook text to append (or the body for a new entry)."},
+            "markdown_body": {"type": "string", "description": "Runbook text to append (or the body for a new entry). With replace_body=true this is the full replacement body."},
+            "replace_body": {
+                "type": "boolean",
+                "default": False,
+                "description": "Rewrite the runbook body wholesale instead of appending. The only way to shorten or restructure an entry (appends alone are refused when they would shrink it). The previous body is archived under .rewrites/ and named in the change-log entry.",
+            },
             "status": {"type": "string", "enum": ["active", "removed"]},
         },
         "required": ["node_id", "reason"],

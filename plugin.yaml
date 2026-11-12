@@ -41,6 +41,12 @@ config_schema:
     default: block
     label: "Read-before-touch guardrail"
     description: "block vetoes a tool call that touches registered infrastructure whose registry entry was not read in this session. warn logs only. off disables the gate."
+  registry_write_gate:
+    type: str
+    choices: [block, warn, off]
+    default: block
+    label: "Registry write gate (single-writer enforcement)"
+    description: "block vetoes a raw write_file/patch/sed on a file infra_upsert owns (services/, servers/, projects/ entries, INDEX.md, change-log.md) and points the agent at infra_upsert. The registry stays open — only the route is enforced. warn logs only. off disables the gate."
   auto_heal_mode:
     type: str
     choices: [auto, playbook_only, notify_only, off]

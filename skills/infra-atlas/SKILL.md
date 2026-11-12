@@ -47,6 +47,16 @@ same turn (`reason` is required and becomes the change-log entry). Use
 `action="mark_removed"` when something is gone for good. Frontmatter is merged;
 the runbook prose is preserved.
 
+**The registry is open — but only through this tool.** A `write_file`, `patch`
+or shell write (`sed -i`, `tee`, `cat >`, `mv`, `rm`) aimed at an entry under
+`servers/`, `services/`, `projects/`, or at `INDEX.md` / `change-log.md` is
+vetoed by the registry write gate (`registry_write_gate: block|warn|off`). A
+hand-edit skips frontmatter merging, the INDEX refresh, the change-log entry and
+the `verified_at` bump, so the node table and the files drift apart. The gate
+covers only the files this tool owns: `plans/`, `conventions.md`,
+`LIVE-STATE.md`, tracker files and log directories stay hand-editable, because
+there is no tool path for them.
+
 Useful fields: `probe` (http URL or `tcp://host:port` for uptime),
 `auto_heal_policy` (`auto` | `playbook_only` | `notify_only` | `off`), and
 `pitfalls` (surfaced to the guardrail and to the outage responder).
@@ -55,6 +65,18 @@ Useful fields: `probe` (http URL or `tcp://host:port` for uptime),
 plugin can run, so it is an operator field in the registry entry. If a node needs a
 restart playbook, tell the operator what command to add rather than writing it
 yourself.
+
+**Rewriting a runbook.** Appending can only grow an entry, so a structural
+rewrite — shortening, reordering, replacing a stale runbook wholesale — needs
+`replace_body=true` with the complete new text in `markdown_body`. The previous
+body is archived under `.rewrites/` and named in the change-log entry, so a bad
+rewrite is recoverable without git. There is no reason to hand-edit an entry:
+`replace_body` covers every case the append-only rule refuses.
+
+**Never write through `~/hermes-kb/`.** `~/hermes-kb/01-Infrastructure/infra-registry`
+is a symlink to the registry root, kept so the backup mirror can see it. It is a
+legitimate *read* address and never a write address — the gate recognises it as
+the registry and blocks writes through it just as it blocks the real path.
 
 ## 4. Credentials live in the vault, never in the registry
 

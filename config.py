@@ -168,6 +168,18 @@ def guardrail_mode() -> str:
     return mode if mode in {"block", "warn", "off"} else "block"
 
 
+def registry_write_gate() -> str:
+    """How raw writes to registry-owned files are treated.
+
+    ``block`` (default) vetoes them and names ``infra_upsert``; ``warn`` records
+    only; ``off`` disables the gate. This is separate from ``guardrail_mode``
+    because the two answer different questions: the read-before-touch gate
+    protects *hosts*, this one protects the *knowledge base's* single writer.
+    """
+    mode = str(setting("registry_write_gate") or "block").strip().lower()
+    return mode if mode in {"block", "warn", "off"} else "block"
+
+
 def auto_heal_mode() -> str:
     mode = str(setting("auto_heal_mode") or "notify_only").strip().lower()
     return mode if mode in {"auto", "playbook_only", "notify_only", "off"} else "notify_only"

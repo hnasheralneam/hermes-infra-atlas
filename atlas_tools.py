@@ -271,6 +271,7 @@ def infra_upsert(args: dict[str, Any], session_id: str = "", task_id: str = "", 
             reason,
             session_id=session,
             body_append=str(args.get("markdown_body") or ""),
+            replace_body=bool(args.get("replace_body")),
         )
     except Exception as exc:  # noqa: BLE001
         return _json({"error": f"registry write failed: {exc}"})

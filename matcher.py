@@ -7,6 +7,7 @@ node table changes, keyed on its size and newest ``updated_at``.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -288,6 +289,167 @@ def nodes_for_registry_path(store, path: str) -> list[dict[str, Any]]:
 
 def _command_words(command: str) -> set[str]:
     return {word.lower() for word in _WORD_RE.findall(command)}
+
+
+# --- Registry write gate -----------------------------------------------------
+#
+# The knowledge base is meant to be OPEN — but written through `infra_upsert`,
+# which merges frontmatter, refreshes INDEX.md, prepends the change-log entry and
+# bumps verified_at. A raw `write_file`/`patch`/`sed -i` on an entry skips all of
+# that and silently forks the registry from the plugin's model of it.
+#
+# So the gate covers exactly the files `infra_upsert` owns and nothing else:
+# entry files under services/, servers/, projects/, plus INDEX.md and
+# change-log.md. Everything else in the tree (plans/, conventions.md,
+# LIVE-STATE.md, the CCDC channel tracker and its log dir) stays hand-editable —
+# there is no sanctioned tool path for it, and blocking it would just be an
+# obstacle with no exit.
+
+#: Top-level files `infra_upsert` writes.
+REGISTRY_OWNED_FILES = ("INDEX.md", "change-log.md")
+#: Directories whose ``*.md`` entries `infra_upsert` owns.
+REGISTRY_OWNED_DIRS = ("servers", "services", "projects")
+
+#: Command forms that write. A read-only inspection of the same path (cat, grep,
+#: ls, head) must never trip the gate, so write-ness is decided first.
+_TERMINAL_WRITE_RES = (
+    re.compile(r"\bsed\s+(?:-\S+\s+)*-i"),
+    re.compile(r"\b(?:perl|ruby)\s+(?:-\S+\s+)*-i"),
+    re.compile(r"\btee\b"),
+    re.compile(r"\b(?:truncate|shred|dd)\b"),
+    re.compile(r"\b(?:mv|cp|install|ln|rm|unlink|touch|chmod|chown)\b"),
+    re.compile(r"\bgit\s+(?:add|commit|checkout|restore|reset|rm|mv|apply|stash|clean)\b"),
+    re.compile(r"\b(?:python[0-9.]*|node|perl|ruby)\b[^|;&]*\bopen\s*\("),
+    re.compile(r"\b(?:write_text|write_bytes|writeFileSync|appendFileSync|os\.replace)\s*\("),
+)
+
+
+def _writeish(command: str) -> bool:
+    """Whether a shell command can write a file at all."""
+    text = str(command or "")
+    if not text.strip():
+        return False
+    # A plain redirect is the most common form; ignore harmless stderr/null ones
+    # (2>&1, >/dev/null) so a read that quiets its output is not called a write.
+    cleaned = re.sub(r"(?:^|\s)\d*(?:>&\d+|>+\s*/dev/null)\b", " ", text)
+    if ">" in cleaned or ">>" in text:
+        return True
+    return any(pattern.search(text) for pattern in _TERMINAL_WRITE_RES)
+
+
+def _registry_owned(rel: str) -> bool:
+    """Whether *rel* (a path relative to the registry root, ``/``-separated) is a
+    file ``infra_upsert`` owns."""
+    rel = rel.strip().lstrip("./").replace("\\", "/")
+    if rel in REGISTRY_OWNED_FILES:
+        return True
+    parts = rel.split("/")
+    return len(parts) == 2 and parts[0] in REGISTRY_OWNED_DIRS and parts[1].endswith(".md")
+
+
+def _symlinks_into(root_real: str) -> list[str]:
+    """Known symlinks that resolve to the registry root.
+
+    The club keeps ``~/hermes-kb/01-Infrastructure/infra-registry`` as a symlink for
+    the backup mirror. That path is a legitimate *read* address but never a write
+    address, so the gate must recognise it as the registry rather than as some
+    unrelated directory. Probed cheaply; a missing link is not an error.
+    """
+    candidates = (
+        os.path.expanduser("~/hermes-kb/01-Infrastructure/infra-registry"),
+        os.path.expanduser("~/hermes-kb/infra-registry"),
+    )
+    found: list[str] = []
+    for candidate in candidates:
+        try:
+            if os.path.islink(candidate) and os.path.realpath(candidate) == root_real:
+                found.append(candidate)
+        except OSError:
+            continue
+    return found
+
+
+def registry_write_targets(tool_name: str, args: dict[str, Any], root: Any) -> list[str]:
+    """Registry-owned paths this call would write, as paths relative to *root*.
+
+    Empty means "not a registry write" — the caller lets the call through. Paths
+    outside the registry, and registry files no tool owns, are never returned.
+    """
+    if not root:
+        return []
+    root_s = str(root).rstrip("/")
+    try:
+        root_real = os.path.realpath(os.path.expanduser(root_s))
+    except OSError:
+        root_real = os.path.expanduser(root_s)
+    home = os.path.expanduser("~")
+    tilde_root = root_s.replace(home, "~", 1) if root_s.startswith(home) else root_s
+
+    def owned_relative(candidate: str) -> Optional[str]:
+        """Normalise *candidate* to a registry-relative path if it lands inside root."""
+        if not candidate:
+            return None
+        raw = str(candidate).strip().strip("'\"")
+        if not raw:
+            return None
+        expanded = os.path.expandvars(os.path.expanduser(raw))
+        bases = {root_real, os.path.expanduser(root_s)}
+        bases.update(_symlinks_into(root_real))
+        for base in bases:
+            base = base.rstrip("/")
+            values = [expanded]
+            if os.path.isabs(expanded):
+                try:
+                    values.append(os.path.realpath(expanded))
+                except OSError:
+                    pass
+            for value in values:
+                if value == base:
+                    return None
+                if value.startswith(base + "/"):
+                    rel = value[len(base) + 1:]
+                    return rel if _registry_owned(rel) else None
+        return None
+
+    if tool_name in {"write_file", "patch"}:
+        rel = owned_relative(str(args.get("path") or args.get("file_path") or ""))
+        return [rel] if rel else []
+
+    if tool_name != "terminal":
+        return []
+
+    command = str(args.get("command") or "")
+    if not _writeish(command):
+        return []
+
+    hits: list[str] = []
+    # Every prefix the registry can legitimately be addressed through: the
+    # configured path, its realpath, its ~-form, and any symlink that resolves to
+    # it (hermes-kb/01-Infrastructure/infra-registry is one, kept for the backup
+    # mirror). Without the symlink forms a shell write through that path read as a
+    # write to somewhere else and slipped past.
+    prefixes = {root_s, root_real, tilde_root}
+    for base in list(prefixes):
+        try:
+            prefixes.add(os.path.realpath(os.path.expanduser(base)))
+        except OSError:
+            pass
+    for link in _symlinks_into(root_real):
+        prefixes.add(link)
+    for prefix in prefixes:
+        for match in re.finditer(re.escape(prefix.rstrip("/")) + r"/([^\s'\"`;|&<>()]+)", command):
+            rel = match.group(1).rstrip("/")
+            if _registry_owned(rel) and rel not in hits:
+                hits.append(rel)
+    # Relative forms are only meaningful when the command names the registry
+    # (a `cd` into it, or the root path) — otherwise `services/x.md` is some
+    # other project's file and none of our business.
+    if not hits and ("infra-registry" in command or root_s in command):
+        for match in re.finditer(r"(?<![\w./~-])((?:%s)/[^\s'\"`;|&<>()]+)" % "|".join(REGISTRY_OWNED_DIRS), command):
+            rel = match.group(1).rstrip("/")
+            if _registry_owned(rel) and rel not in hits:
+                hits.append(rel)
+    return hits
 
 
 def classify(store, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
