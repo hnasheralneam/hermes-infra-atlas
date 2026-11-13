@@ -150,6 +150,99 @@ def remediation_brief(store, node: dict[str, Any], incident: dict[str, Any]) -> 
     )
 
 
+def _inspection_brief(store, node: dict[str, Any]) -> str:
+    """A healthy node's Ask Hermes text: what it is, not what is broken."""
+    return "\n".join(
+        [
+            f"[INFRA-ATLAS NODE BRIEF] {node.get('label')} (`{node['id']}`) is {node.get('health_status')}"
+            f" and {node.get('drift_status')} — the docs and reality agree.",
+            f"- Registry file: {node.get('registry_path') or 'none'}",
+            f"- Managed by: {node.get('managed_by') or 'unknown'}"
+            f" (unit: {node.get('systemd_unit') or 'n/a'}, host: {node.get('host_ip') or node.get('tailnet_ip') or 'n/a'})",
+            f"- Probe: {node.get('probe') or 'none'}"
+            + (f" · uptime 24h: {float(node['uptime_24h_pct']):.2f}%" if node.get("uptime_24h_pct") is not None else ""),
+            "",
+            "Your mission: read-only inspection only — nothing here is asking for a fix.",
+            f"1. Call `infra_query(node_id=\"{node['id']}\")` and answer questions from that entry.",
+            "2. If the user asks \"is this normal\", compare against the live state and recent incidents with"
+            " `infra_diff` before saying yes.",
+            "3. Do not restart, reconfigure or sweep-edit anything in this mission; if you find a real problem,"
+            " say so and open the fix as its own task.",
+        ]
+    )
+
+
+def _reconciliation_brief(store, node: dict[str, Any], drift: str) -> str:
+    """A drifted node's Ask Hermes text: docs and reality disagree; reconcile."""
+    reasons = node.get("drift_reasons") or []
+    lines = [
+        f"[INFRA-ATLAS NODE BRIEF] {node.get('label')} (`{node['id']}`) has drift: it is `{drift}`.",
+    ]
+    if reasons:
+        lines.append("- What disagrees:")
+        lines.extend(f"    · {r}" for r in reasons[:5])
+    else:
+        lines.append(f"- The sweep marked it `{drift}` without reasons; run `infra_sweep` and read the diff.")
+    lines += [
+        f"- Registry file: {node.get('registry_path') or 'none'}",
+        "",
+        "Your mission: reconcile the documentation with reality — the node answers to probes, it is not down.",
+        f"1. Call `infra_query(node_id=\"{node['id']}\")` for the documented side and check the live side"
+        " (collector output, `infra_sweep(sources=[...])` scoped to what changed).",
+        "2. Decide which is right. If reality moved, `infra_upsert` the corrected fields with a `reason`;"
+        " if the entry is live and undocumented, adopt it with `infra_upsert(action=\"adopt_live\", …)`.",
+        "3. If the docs are right and the drift is real misbehaviour (wrong IP claimed, rogue duplicate),"
+        " escalate to the operator instead of adopting it.",
+    ]
+    return "\n".join(lines)
+
+
+def _manual_down_brief(store, node: dict[str, Any]) -> str:
+    """Down node dispatched by hand with no open incident (the watchdog never saw it)."""
+    parent = store.get_node(node["parent_id"]) if node.get("parent_id") else None
+    live = node.get("live_state") or {}
+    return "\n".join(
+        [
+            "[INFRA-ATLAS AUTONOMOUS DOWNTIME RESPONDER]",
+            f"node `{node['id']}` ({node.get('label')}) is DOWN — dispatched by hand; no incident is open"
+            " to resolve (the watchdog has not registered a failure streak for it).",
+            f"- Last probe result: {live.get('probe_detail') or node.get('probe') or 'no probe recorded'}",
+            f"- Upstream host status: "
+            + (f"{parent.get('label')} is {parent.get('health_status')}" if parent else "no parent recorded"),
+            f"- Registry file: {node.get('registry_path') or 'none'}",
+            f"- Documented recovery command: {node.get('recovery_cmd') or 'none'}"
+            " (run it through the terminal tool, so Hermes' command approval applies)",
+            f"- CRITICAL PITFALLS: {str(node.get('pitfalls_summary') or '').strip() or 'none recorded'}",
+            "",
+            "Your mission:",
+            f"1. Call `infra_query(node_id=\"{node['id']}\")` and read the registry entry before touching anything.",
+            f"2. Diagnose why `{node['id']}` is down (service status, logs, container/VM state).",
+            "3. Remediate following the registry's 'Managed by' and CRITICAL PITFALLS rules.",
+            "4. Call `infra_sweep(sources=[\"probes\"])` to verify the node is back UP.",
+            "   If it stays down, open the outage properly: `infra_incidents(action=\"heal\", node_id=\""
+            f"{node['id']}\")` so the incident exists and can be resolved with evidence.",
+        ]
+    )
+
+
+def dispatch_brief(store, node: dict[str, Any], incident: Optional[dict[str, Any]]) -> str:
+    """The state-aware brief behind Ask Hermes and ``/atlas show`` hand-offs.
+
+    ``remediation_brief`` was the only brief there was, so a healthy node was
+    handed an outage mission. One entry point now picks by what the graph
+    actually says: open incident → the playbook, down without one → the manual
+    recovery mission, drift → reconciliation, everything else → inspection.
+    """
+    if incident:
+        return remediation_brief(store, node, incident)
+    if str(node.get("health_status") or "").lower() == "down":
+        return _manual_down_brief(store, node)
+    drift = str(node.get("drift_status") or "")
+    if drift in {"changed", "unregistered", "stale"}:
+        return _reconciliation_brief(store, node, drift)
+    return _inspection_brief(store, node)
+
+
 # -- stage 1 ----------------------------------------------------------------
 def _project_dir_allowed(node: dict[str, Any], cmd: str) -> bool:
     """A compose command may only run in a registry-declared project directory.

@@ -47,6 +47,17 @@ def submodule(name: str):
     return importlib.import_module(f"{PACKAGE}.{name}")
 
 
+def load_dashboard_api():
+    """The dashboard's FastAPI module, standalone (same shape test_api_and_tools uses)."""
+    spec = importlib.util.spec_from_file_location(
+        "atlas_plugin_api", PLUGIN_DIR / "dashboard" / "plugin_api.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def configure(settings: Optional[dict[str, Any]] = None, registry: Optional[Path] = None) -> None:
     """Point the plugin at a temp registry and a fixed settings table."""
     settings = dict(settings or {})
@@ -72,6 +83,7 @@ class FakeCtx:
         self.hooks: dict[str, list] = {}
         self.skills: list[tuple] = []
         self.commands: dict[str, Any] = {}
+        self.cli_commands: dict[str, Any] = {}
         self.blueprints: list[tuple] = []
         self.settings: dict[str, Any] = {}
         self.dispatched: list[tuple[str, dict]] = []
@@ -93,6 +105,13 @@ class FakeCtx:
 
     def register_command(self, name, handler, description="", args_hint=""):
         self.commands[name] = handler
+        return None
+
+    def register_cli_command(self, name, help, setup_fn, handler_fn=None, description=""):
+        self.cli_commands[name] = {
+            "name": name, "help": help, "setup_fn": setup_fn,
+            "handler_fn": handler_fn, "description": description,
+        }
         return None
 
     def register_automation_blueprint(self, key, **kwargs):
