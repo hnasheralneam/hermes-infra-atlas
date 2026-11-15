@@ -118,6 +118,61 @@ def _policy_for(node: dict[str, Any]) -> str:
 
 
 # -- briefs -----------------------------------------------------------------
+_GUEST_KINDS = {"vm", "lxc"}
+
+# "TCP 5900 refused" is the probe module's wording; render it as the compact
+# verdict form the briefs use: tcp/5900=refused.
+_PROBE_TCP_VERDICT = re.compile(r"\bTCP\s+(\d+)\s+(\w+)")
+
+
+def _host_power_line(store, node: dict[str, Any]) -> Optional[str]:
+    """'vm=running (qm status)' when the node lives on a proxmox guest whose power
+    state is known, else None.
+
+    Incident #12 called a refused x11vnc port "node down" while the VM hosting
+    it was running and otherwise healthy. Host power state and probe verdict
+    are separate facts and the brief must never collapse them into one word.
+    """
+    parent = store.get_node(node["parent_id"]) if node.get("parent_id") else None
+    if not parent or str(parent.get("kind") or "").lower() not in _GUEST_KINDS:
+        return None
+    power = str((parent.get("live_state") or {}).get("pve_status") or "").strip().lower()
+    if not power:
+        return None
+    kind_word = "vm" if str(parent.get("kind") or "").lower() == "vm" else "ct"
+    return f"{kind_word}={power} (qm status)"
+
+
+def _probe_verdict(incident: dict[str, Any], node: dict[str, Any]) -> str:
+    """The failed probe in compact form: 'probe tcp/5900=refused'."""
+    text = str(
+        incident.get("trigger_error")
+        or (node.get("live_state") or {}).get("probe_detail")
+        or "probe failed"
+    ).strip()
+    match = _PROBE_TCP_VERDICT.search(text)
+    if match:
+        return f"probe tcp/{match.group(1)}={match.group(2).lower()}"
+    return f"probe: {text}"
+
+
+def _downtime_headline(store, node: dict[str, Any], incident: dict[str, Any]) -> str:
+    """Incident headline that keeps VM power state and probe failure apart."""
+    prefix = f"Incident #{incident.get('id')}: node `{node['id']}` ({node.get('label')})"
+    power_line = _host_power_line(store, node)
+    if not power_line:
+        return f"{prefix} is DOWN."
+    if power_line.endswith("=running (qm status)") or power_line.endswith("=online (qm status)"):
+        return (
+            f"{prefix}: {power_line}, {_probe_verdict(incident, node)}. "
+            "The hosting VM is powered on — this is a probe/service failure, not a host outage."
+        )
+    return (
+        f"{prefix}: {power_line}, {_probe_verdict(incident, node)}. "
+        "The hosting VM is powered off — heal the host first; the probe failure is expected."
+    )
+
+
 def remediation_brief(store, node: dict[str, Any], incident: dict[str, Any]) -> str:
     parent = store.get_node(node["parent_id"]) if node.get("parent_id") else None
     parent_line = (
@@ -127,7 +182,7 @@ def remediation_brief(store, node: dict[str, Any], incident: dict[str, Any]) -> 
     return "\n".join(
         [
             "[INFRA-ATLAS AUTONOMOUS DOWNTIME RESPONDER]",
-            f"Incident #{incident.get('id')}: node `{node['id']}` ({node.get('label')}) is DOWN.",
+            _downtime_headline(store, node, incident),
             f"- Probe failure: {incident.get('trigger_error')}",
             f"- Upstream host status: {parent_line}",
             f"- Registry file: {node.get('registry_path') or 'none'}",

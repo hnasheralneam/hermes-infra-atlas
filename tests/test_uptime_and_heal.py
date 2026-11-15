@@ -238,6 +238,71 @@ def test_remediation_brief_carries_the_runbook(plugin_home):
     assert "infra_incidents(action=\"resolve\"" in brief
 
 
+def test_incident_brief_separates_vm_power_state_from_probe_failure(plugin_home):
+    """Incident #12 said 'node down' while its VM was running — only x11vnc's
+    TCP port refused. The brief must print host power state first, then the
+    failed probe, and never the flat 'is DOWN' sentence."""
+    store, uptime = _prepare(threshold=1)
+    store.upsert_node(
+        {
+            "id": "vm-220",
+            "kind": "vm",
+            "label": "gpu box",
+            "health_status": "up",
+            "ports": [],
+            "live_state": {"source": "proxmox", "pve_status": "running"},
+        }
+    )
+    child = _node(id="svc-x11vnc", parent_id="vm-220")
+    store.upsert_node(
+        {**child, "health_status": "down",
+         "live_state": {"incident_eligible": True, "probe_detail": "TCP 5900 refused"}}
+    )
+    incident = store.open_incident("svc-x11vnc", "x11vnc", "TCP 5900 refused", 3)
+
+    brief = uptime.remediation_brief(store, store.get_node("svc-x11vnc"), incident)
+    assert "vm=running (qm status), probe tcp/5900=refused" in brief
+    assert "is DOWN" not in brief
+    assert "not a host outage" in brief
+
+
+def test_brief_names_a_stopped_vm_as_the_root_cause(plugin_home):
+    """Power state is still printed first when the host really is off: the
+    probe failure is then expected noise, not a second outage."""
+    store, uptime = _prepare(threshold=1)
+    store.upsert_node(
+        {
+            "id": "vm-221",
+            "kind": "vm",
+            "label": "quiet box",
+            "health_status": "down",
+            "ports": [],
+            "live_state": {"source": "proxmox", "pve_status": "stopped"},
+        }
+    )
+    child = _node(id="svc-on-221", parent_id="vm-221")
+    store.upsert_node({**child, "health_status": "down"})
+    incident = store.open_incident("svc-on-221", "svc-on-221", "TCP 8080 refused", 2)
+
+    brief = uptime.remediation_brief(store, store.get_node("svc-on-221"), incident)
+    assert "vm=stopped (qm status), probe tcp/8080=refused" in brief
+    assert "powered off" in brief
+
+
+def test_brief_without_a_known_guest_power_state_keeps_the_plain_down_line(plugin_home):
+    """No proxmox live state on the parent (e.g. a plain server host): the old
+    'is DOWN' sentence must survive unchanged."""
+    store, uptime = _prepare(threshold=1)
+    store.upsert_node({"id": "srv-1", "kind": "server", "label": "bare host", "health_status": "up", "ports": []})
+    child = _node(id="svc-plain", parent_id="srv-1")
+    store.upsert_node({**child, "health_status": "down"})
+    incident = store.open_incident("svc-plain", "svc-plain", "connection refused", 2)
+
+    brief = uptime.remediation_brief(store, store.get_node("svc-plain"), incident)
+    assert "is DOWN" in brief
+    assert "(qm status)" not in brief
+
+
 def test_an_undocumented_unit_never_pages(plugin_home):
     """A discovered system unit with no entry has no runbook: drift, not an outage."""
     store, uptime = _prepare(mode="auto", threshold=1)
