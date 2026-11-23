@@ -389,7 +389,13 @@ def parse_entry(path: Path, root: Path, kind_hint: Optional[str] = None) -> Opti
     base_kind = str(meta.get("kind") or kind)
     is_project = base_kind == "project"
 
-    ip_match = meta.get("host_ip") or (None if is_project else _first_ip(body))
+    # A server that declares tailnet_ip and NO host_ip is tailnet-only (a box with no
+    # LAN presence): the body's first IP must not be mistaken for its address — it is
+    # usually a peer/relay mentioned in prose (2026-11-23: inference-27b's auto row
+    # carried 10.0.0.143:8080 from a k2-primary sentence). Explicit meta wins.
+    ip_match = meta.get("host_ip") or (
+        None if (is_project or meta.get("tailnet_ip")) else _first_ip(body)
+    )
     tailnet_hit = None if is_project else _TAILNET_IP_RE.search(body)
     tailnet_match = meta.get("tailnet_ip") or (tailnet_hit.group(0) if tailnet_hit else None)
 
@@ -651,8 +657,35 @@ def update_index(root: Path, node: dict[str, Any]) -> None:
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8", errors="replace")
+    # Decommission hook (2026-11-23, dream proposal 11-23 [Plugin fix], approved by
+    # Hamza): the hand-authored "Active …" prose tables at the TOP of INDEX.md were
+    # never synced, so a tombstoned node kept advertising as LIVE up top (Wazuh row
+    # survived LXC 218's destruction; the 27B auto-row carried a dead address).
+    # When this node's status is removed/retired, drop every prose row that carries
+    # its entry path — a row is a prose row when it has >=5 pipes (the auto-table
+    # rows this function owns have exactly 4) and does not start with a link cell.
+    if str(node.get("status") or "").lower() in {"removed", "decommissioned", "retired"}:
+        rel = str(node.get("registry_path") or "")
+        if rel:
+            kept = []
+            for line in text.splitlines(keepends=True):
+                s = line.strip()
+                if (
+                    s.startswith("|")
+                    and rel in s
+                    and s.count("|") >= 5
+                    and not s.lstrip("| ").startswith("[")
+                    and not s.startswith("|--")
+                ):
+                    continue
+                kept.append(line)
+            if len(kept) < len(text.splitlines()):
+                _atomic_write(path, "".join(kept))
+                text = "".join(kept)
     section_title = {"server": "Servers", "service": "Services", "project": "Projects"}.get(node["kind"], "Services")
     detail = node.get("host_ip") or ""
+    if not detail and node.get("tailnet_ip"):
+        detail = str(node["tailnet_ip"])
     if node.get("ports"):
         detail = f"{detail}:{node['ports'][0]}" if detail else f"port {node['ports'][0]}"
     row = f"| [`{node['label']}`]({node['registry_path']}) | {detail or '—'} | {node.get('managed_by') or '—'} |\n"
