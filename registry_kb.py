@@ -663,7 +663,11 @@ def update_index(root: Path, node: dict[str, Any]) -> None:
             _atomic_write(path, updated)
         return
     link = f"]({node['registry_path']})"
-    if node["id"] in text or link in text:
+    if link in text:
+        # Only an existing ROW (the link) suppresses insertion; a bare mention of
+        # the node id in prose elsewhere in INDEX.md must not (fix 2026-11-23:
+        # huitzilopochtli row never landed because its id appeared in the Devbot
+        # row's prose — dream proposal 2026-11-20 [Plugin fix], approved).
         return
     lines = text.splitlines(keepends=True)
     header_index = None
