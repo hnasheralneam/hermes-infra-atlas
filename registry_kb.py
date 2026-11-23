@@ -656,9 +656,11 @@ def update_index(root: Path, node: dict[str, Any]) -> None:
     if node.get("ports"):
         detail = f"{detail}:{node['ports'][0]}" if detail else f"port {node['ports'][0]}"
     row = f"| [`{node['label']}`]({node['registry_path']}) | {detail or '—'} | {node.get('managed_by') or '—'} |\n"
-    row_re = re.compile(rf"^\|\s*\[[^\]]+\]\({re.escape(str(node['registry_path']))}\)\s*\|[^|]+\|[^|]+\|\s*$", re.M)
-    if row_re.search(text):
-        updated = row_re.sub(row.rstrip("\n"), text, count=1)
+    row_re = re.compile(rf"\|\s*\[[^\]]+\]\({re.escape(str(node['registry_path']))}\)\s*\|[^|]+\|[^|]+\|")
+    match = row_re.search(text)
+    if match:
+        prefix = "\n" if match.start() > 0 and text[match.start() - 1] not in "\n" else ""
+        updated = row_re.sub(prefix + row.rstrip("\n"), text, count=1)
         if updated != text:
             _atomic_write(path, updated)
         return
@@ -688,6 +690,10 @@ def update_index(root: Path, node: dict[str, Any]) -> None:
     block = lines[header_index:insert_at]
     if not any(line.strip().startswith("|") for line in block):
         block = block + ["\n", "| Entry | Address | Managed by |\n", "|---|---|---|\n"]
+    if block and not block[-1].endswith("\n"):
+        # Never glue a new row onto a line that lost its newline (glued pairs are
+        # unmatchable by the anchored row_re, corrupting future refreshes).
+        block[-1] += "\n"
     block.append(row)
     _atomic_write(path, "".join(lines[:header_index] + block + lines[insert_at:]))
 
