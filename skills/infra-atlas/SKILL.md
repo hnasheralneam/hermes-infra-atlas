@@ -59,7 +59,6 @@ entry" — must be rewritten) from historical citations ("see change-log
 narrative into a lie, and rescue any LIVE-only content (matrices, decisions)
 from the doomed file first — grab it from the Nextcloud mirror inside the
 30-min sync window before it gets pruned.
-
 Drift states: `matched` (docs == reality), `changed` (alive but different — IP,
 port, unit, parent), `unregistered` (alive, no entry), `stale` (documented
 active, nothing answers), `doc_only` (nothing to probe).
@@ -90,6 +89,11 @@ session history. Never create or append to a registry journal.
 Useful fields: `probe` (http URL or `tcp://host:port` for uptime),
 `auto_heal_policy` (`auto` | `playbook_only` | `notify_only` | `off`), and
 `pitfalls` (surfaced to the guardrail and to the outage responder).
+
+**Registering a Proxmox VM/container as a node:** the `kind` enum has no `vm` value — use
+`kind="service"` plus `vmid=<id>` and `parent_id=<host-node-id>` (with `host_ip`/`ports`/
+`managed_by: proxmox`); the entry lands at `services/<vmid>-<label>.md`. `vmid` alone with a
+wrong/absent `kind` does not make a VM node.
 
 `recovery_cmd` is **not** writable through `infra_upsert` — it names a command the
 plugin can run, so it is an operator field in the registry entry. If a node needs a
@@ -169,6 +173,18 @@ When the watchdog wakes you, its brief already names the node, the failed probe,
 the parent host's state, the managed-by rule and the pitfalls. Follow it:
 `infra_query` → diagnose → remediate → `infra_sweep` to verify → `resolve`.
 
+**Briefs are state-aware** through `uptime.dispatch_brief`: open incident → the
+remediation playbook, down without an incident → the manual recovery mission,
+drift → reconciliation, healthy → read-only inspection. Every hand-off text
+(Ask Hermes, `/atlas show`) routes through it — never reuse `remediation_brief`
+for a healthy node.
+
+A hand-dispatched brief (Ask Hermes, `/atlas show`) is state-aware, not an
+outage mission by default: healthy → read-only inspection, drifted →
+reconciliation (fix docs via `infra_upsert`/`adopt_live`), down without an open
+incident → recovery, and it tells you to open the incident properly via `heal`
+if the node stays down.
+
 ## 5a. Wiring and internals that affect how you work the plugin
 
 - **Guardrail/plugin config is bound at session wiring.** Flipping
@@ -195,6 +211,23 @@ the parent host's state, the managed-by rule and the pitfalls. Follow it:
   `infra_query`. Do not campaign agents to route traffic through the tools —
   enforce attribution via the ledger instead.
 
+**Watchdog reporting is throttled, and the script is generated.** The cron job delivers the
+script's stdout verbatim, so an incident that stays open is NOT re-announced every tick: the
+script keeps notify state in `~/.hermes/plugin-data/infra-atlas/watchdog-notify.json` and
+announces an incident when it is new, its status changes, or every `WATCHDOG_REALERT_SEC`
+(default 4 h); resolutions are announced exactly once. Healthy/suppressed ticks print
+`{"wakeAgent": false}` (silent, zero tokens). The sweep still runs every 5 m — detection
+latency is unchanged, only chat delivery is rate-limited.
+
+- Change watchdog behaviour by editing the `WATCHDOG_SCRIPT` template in `uptime.py` and
+  regenerating with `uptime.install_watchdog_script()` — edits to the installed
+  `~/.hermes/scripts/infra_atlas_watchdog.py` are silently lost on the next `setup_watchdog` /
+  dashboard install.
+- Verify a change: `PYTHONPATH=~/.hermes/hermes-agent pytest tests/ -k watchdog` from the repo
+  (bare pytest fails on `ModuleNotFoundError: hermes_constants`), then run the installed script
+  twice — the second tick must be silent — and with `WATCHDOG_REALERT_SEC=60` to prove the
+  re-alert branch fires.
+
 ## 6. Chat directives (Hermes Desktop)
 
 Emit these alone on their own line to render live cards in the transcript:
@@ -203,57 +236,6 @@ Emit these alone on their own line to render live cards in the transcript:
 ::infra{id="svc-litellm"}
 ::drift{}
 ```
-
-## 7. Changing the gate or the protocol itself
-
-The gate is plugin code, not prose. A rule that lives only in a skill is a
-suggestion; a rule in `hooks.py`/`matcher.py` holds regardless of model, skill or
-session. When asked to make agents behave differently around the registry, change
-the code and prove it with a test — don't just edit skill text.
-
-- **Plan before you build.** A question like "what's the best way to achieve
-  this?" is a request for the plan, not the implementation. Present the plan,
-  name the open decisions, and wait for the go-ahead — especially for
-  infra-changing work on the club's own tooling.
-- **Place the gate before any early return.** The registry write veto runs
-  *before* the `guardrail_mode == "off"` check, because the two answer different
-  questions: the read-before-touch gate protects *hosts*, the write gate protects
-  the KB's single writer. Put it after that return and it silently disables
-  itself whenever the host guardrail is off — which is exactly when someone is
-  doing bulk work.
-- **A gate with no sanctioned exit is an obstacle.** Cover only the files
-  `infra_upsert` owns (`servers/`, `services/`, `projects/` entries, `INDEX.md`,
-  `change-log.md`). `plans/`, `conventions.md`, `LIVE-STATE.md`, tracker files and
-  log dirs have no tool path — leave them hand-editable, or agents route around
-  the gate and the rule stops meaning anything.
-- **You cannot verify your own hook edit from the session that made it.** The
-  plugin is imported once per process, so the running session keeps executing the
-  code it loaded at start. A probe run from that same session tests stale code
-  and will "pass" or "fail" misleadingly. Prove a change in a *fresh* process,
-  then reload the gateway for it to take effect.
-- **Resolve paths before comparing them.** The shell-write matcher compares string
-  prefixes, so a symlinked alias of the registry escapes it: `write_file`/`patch`
-  through the alias are caught (realpath'd), `sed -i`/`tee` through it are not.
-  Every alias path (`~/hermes-kb/01-Infrastructure/infra-registry` and friends)
-  must be realpath-resolved into the accepted-prefix set.
-
-## 7. Internals that matter when auditing compliance
-
-- **The markdown registry is the source of truth.** `infra_query` returns the entry
-  text read fresh from disk; the sqlite graph is an index re-parsed from the wiki on
-  every sweep. Direct `read_file`/`patch` on registry files is therefore the same
-  data — never treat path access as a bypass or "leakage" of the tool API.
-- **Hooks fire in every process** (discord, cron, subagent, oneshot) even where the
-  plugin's *tools* are not exposed to the model. A session that never calls
-  `infra_query` can still be fully guardrailed — check the ledger before concluding
-  a surface bypasses atlas.
-- **Ground truth for access audits:** `~/.hermes/plugin-data/infra-atlas/atlas.db`
-  — `activity_ledger` (every read_doc / touch_allowed / touch_blocked event, per
-  session; aggregate per day with `date(ts,'unixepoch')`) and `session_reads`
-  (`read_via` splits unlocks into `read_file` vs `infra_query`). Cross-reference
-  session ids against `sessions.source` in `~/.hermes/state.db` to attribute usage
-  gaps by surface. sqlite timestamps need the `'unixepoch'` modifier; parse
-  `messages.tool_calls` with python sqlite3+json, not piped CLI line output.
 
 ## 7. Changing the gate or the protocol itself
 

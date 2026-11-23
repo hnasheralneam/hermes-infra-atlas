@@ -67,9 +67,14 @@ def _unreachable(exc: Any) -> bool:
     return code in {errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN, errno.ETIMEDOUT}
 
 
-def _http_probe(url: str, timeout: float, ip: Optional[str] = None, host: str = "") -> tuple[str, Optional[float], str]:
+def _http_probe(url: str, timeout: float, ip: Optional[str] = None, host: str = "", auth: Optional[str] = None) -> tuple[str, Optional[float], str]:
     started = time.monotonic()
     headers = {"User-Agent": "infra-atlas/0.1"}
+    if auth:
+        # Authenticated model-list probe (model_endpoint nodes carry probe_auth from
+        # the consumer's own config) so a LiteLLM-style gateway answers 200 instead
+        # of logging a keyless 401 failure row every sweep (2026-11-23).
+        headers["Authorization"] = auth if auth.lower().startswith(("bearer ", "basic ")) else f"Bearer {auth}"
     if ip and url.startswith("http://"):
         headers["Host"] = host  # connect by address for plain HTTP; keep hostname for HTTPS so TLS SNI matches
         parsed = urlparse(url)
@@ -227,7 +232,7 @@ def probe_node(node: dict[str, Any], timeout: float = DEFAULT_TIMEOUT, ip: Optio
             "live_state": {"source": "probes", "probe": probe_url, "probe_detail": "hostname did not resolve"},
         }
     if kind == "http":
-        status, latency, detail = _http_probe(address, timeout, ip=ip, host=_host_of(address))
+        status, latency, detail = _http_probe(address, timeout, ip=ip, host=_host_of(address), auth=node.get("probe_auth"))
     else:
         candidates = _tcp_candidates(node) or [(kind, address, probe_url)]
         attempts = [(candidate, _tcp_probe(candidate[1], timeout, ip=ip)) for candidate in candidates]

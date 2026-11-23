@@ -1,45 +1,53 @@
-# Access audit — who touched the registry, read or write
+# Registry access audit — tool-traffic vs direct-path traffic
 
-Everything the agents do against registered infrastructure lands in the
-`activity_ledger` table of `atlas.db` (plugin data dir). The retired
-`change-log.md` (pre 2026-11-12) was a hand-written journal; the ledger is its
-automatic, complete replacement.
+Questions like "is everyone actually going through the atlas tools, or still
+hitting the registry files directly?" are answered from two SQLite stores, not
+from memory:
 
-## Read it
-- `infra_diff` — drift transitions + incidents + ledger entries over a window
-  (the normal "what changed / who touched what" question).
-- Raw sqlite (`mode=ro` to avoid writer contention):
-  ```
-  sqlite3 "file:~/.hermes/plugin-data/infra-atlas/atlas.db?mode=ro" \
-    "select datetime(ts,'unixepoch','localtime') t, session_id, tool_name,
-            node_id, action_kind, blocked, substr(summary,1,80)
-     from activity_ledger order by ts desc limit 50;"
-  ```
-- `session_reads` — per-session unlock map (`read_via` = `infra_query`,
-  `read_file`, `watchdog`, …): who was allowed to touch a node and how they
-  earned it.
+## 1. Which unlock path sessions use (`atlas.db`)
 
-## Action kinds
-`read_doc` (unlock, via file read or `infra_query`), `touch_allowed` /
-`touch_blocked` / `touch_warned` (guarded ops), `registry_write_warned`
-(raw write under a warn window), `credential_read`, `incident_opened`.
+```sql
+sqlite3 ~/.hermes/plugin-data/infra-atlas/atlas.db \
+ "select date(read_at,'unixepoch') d,
+    sum(read_via='read_file') rf, sum(read_via='infra_query') iq
+  from session_reads group by 1 order by 1 desc;"
+```
 
-## Standard questions
-- **Coverage of registry access:** join ledger sessions against
-  `state.db` sessions; direct `read_file` unlocks are LEGAL (equivalence by
-  design) — "going through the tool" is a style metric, not a compliance one.
-- **Attribution of a file change:** `args_preview` + `session_id` on
-  touch/write events; the curator ledger (`skills/.curator_ledger.jsonl`) is
-  for SKILL.md, not the registry.
-- **Guardrail health:** blocked-vs-allowed ratio per day; a day of blocks
-  with zero follow-on `read_doc` for the same node = an agent gave up —
-  surface it.
-- **Staleness:** retention is `history_retention_days` (default 90, pruned at
-  each sweep end; incidents never pruned). Older than the window → session
-  history (`session_search`) still holds the narrative.
+`session_reads.read_via` is the ground truth for unlocks: `infra_query`,
+`read_file` (file read ≡ unlock), `desktop`, `watchdog`, `infra_upsert`. A high
+`rf` share is NOT a violation — the guardrail accepts both — but it shows where
+the traffic lives.
 
-## Caveats
-- A process running pre-patch plugin code (long-lived gateway before a
-  disable/enable cycle) writes with the old event vocabulary.
-- The watchdog session id is `cron-watchdog`; children show their own session
-  ids — map via `state.db` `sessions.source`.
+## 2. Direct file traffic per day (`state.db` messages)
+
+```sql
+sqlite3 ~/.hermes/state.db \
+ "select date(timestamp,'unixepoch') d,
+    sum(tool_calls like '%infra_query%' or tool_calls like '%infra_sweep%' or tool_calls like '%infra_upsert%' or tool_calls like '%infra_diff%' or tool_calls like '%infra_incidents%' or tool_calls like '%infra_credentials%') atlas_calls,
+    sum(tool_calls like '%infra-registry%') registry_path_calls
+  from messages where role='assistant' and tool_calls is not null group by 1 order by 1 desc limit 25;"
+```
+
+Parse `tool_calls` JSON in Python for the exact split (terminal grep/cat vs
+read_file vs patch/write registry writes vs `tool_call`-wrapped atlas tools).
+Join session `source` from the `sessions` table to find WHERE the direct
+traffic concentrates: cron and subagent sessions have the tools restricted, so
+direct-path traffic from them is expected, not drift.
+
+## 3. Guardrail effectiveness (`activity_ledger`)
+
+```sql
+select date(ts,'unixepoch') d, action_kind, sum(blocked) blocked, count(*) n
+  from activity_ledger group by 1,2 order by 1 desc;
+```
+
+`touch_blocked` rows prove the gate is enforcing (sessions getting vetoed until
+they read); `touch_allowed` is the accepted-touch stream. Ledger retention is
+`history_retention_days` (pruned at sweep end); incidents are never pruned.
+
+## Interpretation
+
+- Coverage = registry access RECORDED in the ledger (any via), not "calls that
+  used the tool names." The markdown is the API; the tool is one route to it.
+- Before calling traffic "old-style," confirm the sessions doing it don't have
+  the atlas tools in their toolset (cron profiles, delegation children).

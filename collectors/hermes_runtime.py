@@ -77,7 +77,7 @@ def _is_ip(host: str) -> bool:
         return False
 
 
-def _endpoint_node(name: str, base_url: str) -> Optional[dict[str, Any]]:
+def _endpoint_node(name: str, base_url: str, api_key: Optional[str] = None) -> Optional[dict[str, Any]]:
     if not base_url:
         return None
     parsed = urlparse(base_url if "//" in base_url else f"//{base_url}")
@@ -89,7 +89,7 @@ def _endpoint_node(name: str, base_url: str) -> Optional[dict[str, Any]]:
     except ValueError:
         port = "80"
     probe = base_url.rstrip("/") + "/models" if base_url.startswith("http") else None
-    return {
+    node = {
         "id": f"model-{_slug(name)}",
         "kind": "model_endpoint",
         "stratum": 4,
@@ -101,6 +101,15 @@ def _endpoint_node(name: str, base_url: str) -> Optional[dict[str, Any]]:
         "health_status": "unknown",
         "live_state": {"source": "hermes", "base_url": base_url, "provider": name},
     }
+    # A /models probe against an authenticated API gateway (e.g. LiteLLM) answers 401
+    # when sent keyless: the verdict stays "up", but the gateway records a failure
+    # spend row EVERY sweep — ~240/day polluting its logs and inflating error rates
+    # (2026-11-23 probe-pollution investigation). When the consumer's own config
+    # carries the provider key inline, probe WITH it — same credential the agent
+    # already sends to the same endpoint.
+    if api_key and isinstance(api_key, str) and api_key.strip():
+        node["probe_auth"] = api_key.strip()
+    return node
 
 
 def _parse_dt(value: Any) -> Optional[datetime]:
@@ -191,21 +200,29 @@ def collect() -> CollectorResult:
 
     # Model endpoints ---------------------------------------------------
     endpoints: dict[str, str] = {}
+    endpoint_keys: dict[str, Optional[str]] = {}
     model_cfg = config.get("model") or {}
     if isinstance(model_cfg, dict):
         base = model_cfg.get("base_url")
         provider = model_cfg.get("provider") or model_cfg.get("default")
         if base:
             endpoints[str(provider or "primary")] = str(base)
+            endpoint_keys[provider or "primary"] = model_cfg.get("api_key")
     for entry in config.get("custom_providers") or []:
         if isinstance(entry, dict) and entry.get("base_url"):
-            endpoints[str(entry.get("name") or "custom")] = str(entry["base_url"])
+            name = str(entry.get("name") or "custom")
+            endpoints[name] = str(entry["base_url"])
+            endpoint_keys[name] = entry.get("api_key")
     for key, entry in (config.get("providers") or {}).items():
         if isinstance(entry, dict) and entry.get("base_url"):
-            endpoints[str(entry.get("name") or key)] = str(entry["base_url"])
+            name = str(entry.get("name") or key)
+            endpoints[name] = str(entry["base_url"])
+            endpoint_keys[name] = entry.get("api_key") or (
+                os.environ.get(str(entry["key_env"]).strip('$')) if entry.get("key_env") else None
+            )
 
     for name, base_url in endpoints.items():
-        node = _endpoint_node(name, base_url)
+        node = _endpoint_node(name, base_url, endpoint_keys.get(name))
         if not node:
             continue
         result.nodes.append(node)

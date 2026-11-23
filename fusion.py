@@ -374,6 +374,7 @@ def _probe_targets(nodes: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
                     "host_ip": node.get("host_ip"),
                     "tailnet_ip": node.get("tailnet_ip"),
                     "ports": node.get("ports") or [],
+                    "probe_auth": node.get("probe_auth"),
                 }
             )
     return targets
