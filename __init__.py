@@ -138,8 +138,9 @@ def blueprint_kwargs() -> dict[str, Any]:
     return {
         "title": "Infra Atlas uptime watchdog",
         "description": (
-            "Every few minutes, probe the registered fleet and resolve drift. The agent is only woken "
-            "when something is actually down, and then it gets the node's own registry runbook."
+            "Every few minutes, probe the registered fleet and resolve drift. The playbook restarts "
+            "what it can silently; the agent is only woken for incidents it could not auto-fix, one "
+            "compact line per incident, at most one page per hour."
         ),
         "category": "ops",
         "schedule_template": "{minute} */{every_hours} * * *",

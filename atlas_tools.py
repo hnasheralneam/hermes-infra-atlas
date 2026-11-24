@@ -411,12 +411,12 @@ def infra_incidents(args: dict[str, Any], session_id: str = "", task_id: str = "
         interval = max(1, int(args.get("interval_min") or 2))
         enabled = bool(args.get("enabled", True))
         prompt = (
-            "Infra Atlas uptime watchdog. The pre-check script output above contains one or more "
-            "INCIDENT REMEDIATION BRIEFS for infrastructure that is down. For each brief: read the "
-            "registry entry (infra_query), diagnose, remediate following its managed-by and pitfalls, "
-            "verify with infra_sweep(sources=['probes']), then close it with infra_incidents(action="
-            "'resolve', incident_id=..., summary=...). If the brief output is empty or says the fleet "
-            "is healthy, reply with only [SILENT]."
+            "Infra Atlas uptime watchdog. Each non-empty line of the script output above is a "
+            "one-line report of one incident the playbook could NOT auto-heal (the script is silent "
+            "while anything is auto-fixable or on cooldown). For each line: read the registry entry "
+            "(infra_query), diagnose, remediate following its managed-by and pitfalls, verify with "
+            "infra_sweep(sources=['probes']), then close it with infra_incidents(action='resolve', "
+            "incident_id=..., summary=...). Reply with only [SILENT] when the output is silent."
         )
         dispatched = _dispatch_cron(path, interval, prompt, enabled)
         return _json({"script": str(path), "interval_min": interval, "cron": dispatched})

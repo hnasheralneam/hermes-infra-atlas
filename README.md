@@ -22,7 +22,8 @@ documentation *before* it touches the box.
   the agent exactly which entry to read (including the pitfalls you documented).
 - **Uptime + autonomous downtime response** — rolling probe history, flap suppression,
   incidents, and a two-stage heal: a deterministic local restart playbook first, then the
-  agent itself, woken with the node's own runbook as the brief. Healthy ticks cost zero
+  agent itself — woken only for what the playbook could not fix, one compact line per
+  incident, never more than one page per hour. Healthy ticks cost zero
   LLM tokens (`{"wakeAgent": false}`).
 
 ## Install
@@ -219,7 +220,8 @@ Writes are agent-side only — the vault is never writable over HTTP.
 - **Never executes a restart itself.** The command is dispatched through the host `terminal`
   tool, so Hermes' dangerous-command approval applies exactly as if the agent had typed it.
   A process with no approval channel — the cron watchdog, the dashboard backend — does not
-  run restarts at all; it opens the incident and hands the agent the brief.
+  run restarts through the approval queue at all; it lets the local playbook heal what it
+  can and pages the agent, one line per survivor, at most once an hour.
   `recovery_cmd` is therefore **not writable through `infra_upsert`**: it is an operator
   field in the registry entry.
 - **`auto_heal_mode` defaults to `notify_only`** — record the incident and wake the agent.
