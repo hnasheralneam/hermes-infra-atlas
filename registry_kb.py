@@ -667,6 +667,15 @@ def update_index(root: Path, node: dict[str, Any]) -> None:
     if str(node.get("status") or "").lower() in {"removed", "decommissioned", "retired"}:
         rel = str(node.get("registry_path") or "")
         if rel:
+            before = text
+            # 2026-11-24 dream proposal [Plugin fix]: also purge this node's OWN
+            # 3-column auto-table row. The prose-row filter below only touches the
+            # >=5-column tables at the top, so removed nodes kept advertising a
+            # live-looking address in the bottom tables (android VM/template rows
+            # and the n8n `10.0.0.216:4000` row survived their tombstones).
+            auto_row_re = re.compile(
+                rf"[ \t]*\|\s*\[[^\]]+\]\({re.escape(rel)}\)\s*\|[^|]+\|[^|]+\|[ \t]*\r?\n")
+            text = auto_row_re.sub("", text)
             kept = []
             for line in text.splitlines(keepends=True):
                 s = line.strip()
@@ -679,9 +688,11 @@ def update_index(root: Path, node: dict[str, Any]) -> None:
                 ):
                     continue
                 kept.append(line)
-            if len(kept) < len(text.splitlines()):
-                _atomic_write(path, "".join(kept))
-                text = "".join(kept)
+            text = "".join(kept)
+            # A removed node never gets a fresh row inserted either.
+            if text != before:
+                _atomic_write(path, text)
+        return
     section_title = {"server": "Servers", "service": "Services", "project": "Projects"}.get(node["kind"], "Services")
     detail = node.get("host_ip") or ""
     if not detail and node.get("tailnet_ip"):
